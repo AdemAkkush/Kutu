@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@drawable/dialog_back"
+    android:orientation="vertical"
+    android:paddingBottom="5dp"
+    android:clipToPadding="false">
+
+    <TextView
+        android:background="@color/lacivert"
+        android:layout_gravity="center"
+        android:gravity="center"
+        android:id="@+id/single_medicine_name"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textSize="27sp"
+        android:textColor="@color/beyaz"
+        android:textStyle="bold"/>
+
+    <RelativeLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        >
+
+        <LinearLayout
+            android:id="@+id/linear_single"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:textSize="22sp"
+                    android:gravity="center"
+                    android:id="@+id/single_medicine_hour"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textColor="@color/lacivert"
+                   />
+                <TextView
+                    android:textSize="22sp"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text=":"
+                    android:textStyle="bold"/>
+
+                <TextView
+                    android:textSize="22sp"
+                    android:id="@+id/single_medicine_minute"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textColor="@color/lacivert"/>
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:textSize="22sp"
+                    android:id="@+id/single_medicine_section"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:textColor="@color/lacivert"
+                    android:layout_weight=".35"
+                   />
+
+                <TextView
+                    android:textSize="22sp"
+                    android:layout_weight=".35"
+                    android:id="@+id/single_medicine_alarmNo"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:textColor="@color/lacivert"
+                    />
+                <TextView
+                    android:textSize="22sp"
+                    android:layout_weight=".30"
+                    android:id="@+id/single_medicine_dose"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:textColor="@color/lacivert"
+                    />
+            </LinearLayout>
+        </LinearLayout>
+        <Button
+            android:layout_marginStart="40dp"
+            android:layout_below="@id/linear_single"
+            android:layout_alignParentStart="true"
+            android:padding="3dp"
+            android:id="@+id/single_medicine_delete"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="@drawable/button_background"
+            android:text="sil"
+            android:gravity="center"
+            android:textSize="22sp"
+            android:textColor="@color/beyaz"/>
+
+        <Button
+            android:layout_marginEnd="40dp"
+            android:layout_alignParentEnd="true"
+            android:layout_below="@id/linear_single"
+            android:gravity="center"
+            android:padding="3dp"
+            android:id="@+id/single_medicine_send"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="@drawable/button_background"
+            android:text="Alarm Kur"
+            android:textSize="22sp"
+            android:textColor="@color/beyaz"/>
+    </RelativeLayout>
+
+</LinearLayout>

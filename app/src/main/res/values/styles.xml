@@ -1,0 +1,28 @@
+<resources>
+
+    <!-- Base application theme. -->
+    <style name="AppTheme" parent="Theme.AppCompat.Light.NoActionBar">
+        <!-- Customize your theme here. -->
+        <item name="colorPrimary">@color/mavi</item>
+        <item name="colorPrimaryDark">@color/lacivert</item>
+        <item name="colorAccent">@color/lacivert</item>
+        <item name="android:textColor">@color/lacivert</item>
+        <item name="android:numbersSelectorColor"> @color/lacivert</item>
+    </style>
+    
+    <style name="DialogStyle" parent="Theme.AppCompat.Dialog">
+        <item name="colorPrimary">@color/lacivert</item>
+        <item name="colorPrimaryDark">@color/lacivert</item>
+        <item name="colorAccent">@color/lacivert</item>
+        <item name="android:windowNoTitle"> true</item>
+        <item name="android:windowFullscreen">false</item>
+        <item name="android:windowBackground">@color/transparan</item>
+        <item name="android:layout_margin">5dp</item>
+    </style>
+
+    <style name="DialogAnimation">
+        <item name="android:windowEnterAnimation">@anim/anim_enter</item>
+        <item name="android:windowExitAnimation">@android:anim/slide_out_right</item>
+    </style>
+
+</resources>
