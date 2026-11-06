@@ -42,7 +42,7 @@ Gereksinimler: JDK 17+ ve Android SDK (platform 35).
 ```bash
 echo "sdk.dir=/yol/android-sdk" > local.properties   # Android Studio bunu kendisi oluşturur
 ./gradlew :app:assembleDebug          # app/build/outputs/apk/debug/app-debug.apk
-./gradlew :app:testDebugUnitTest      # birim testleri
+./gradlew :app:testDebugUnitTest      # 41 test: API/SSE, bağlam, hafıza, Markdown, uçtan uca (Robolectric)
 ```
 
 Ya da projeyi doğrudan Android Studio ile açın.
