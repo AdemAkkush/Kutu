@@ -92,6 +92,28 @@ class AppFlowTest {
         assertEquals(listOf("Kullanıcının adı Adem."), runBlocking { db.memoryDao().list() }.map { it.content })
     }
 
+    @Test fun choosingAPersonaChipStartsChatWithItsSystemPrompt() {
+        compose.onNodeWithText("💻 Kod asistanı").performClick()
+        compose.onNodeWithText("Mesaj yaz…").performTextInput("Merhaba")
+        compose.onNodeWithContentDescription("Gönder").performClick()
+        compose.waitUntil(15_000) {
+            org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()   // Room'dan dönen coroutine'i ilerlet
+            requests.any { it.contains("\"stream\":true") }
+        }
+        val streamReq = requests.first { it.contains("\"stream\":true") }
+        assertTrue(streamReq, streamReq.contains("deneyimli bir yazılım mühendisisin"))
+        val chat = runBlocking { container.db.chatDao().latest() }!!
+        assertEquals("💻 Kod asistanı", chat.persona)
+    }
+
+    @Test fun inputBarOffersAttachVoiceAndTemplateActions() {
+        compose.onNodeWithContentDescription("Ek ekle").performClick()
+        compose.onNodeWithText("Galeriden resim").assertIsDisplayed()
+        compose.onNodeWithText("Fotoğraf çek").assertIsDisplayed()
+        compose.onNodeWithText("Metin / kod dosyası").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Sesle yaz").assertIsDisplayed()
+    }
+
     @Test fun nextChatReceivesStoredMemoryAndSummaryInSystemPrompt() {
         runBlocking {
             container.db.memoryDao().insert(

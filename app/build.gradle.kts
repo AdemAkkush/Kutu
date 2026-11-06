@@ -31,6 +31,7 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true }
+    sourceSets.getByName("debug").assets.srcDir("$projectDir/schemas")
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
     testOptions {
         unitTests {
@@ -66,11 +67,13 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
     implementation("androidx.datastore:datastore-preferences:1.1.1")
+    implementation("androidx.exifinterface:exifinterface:1.3.7")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     testImplementation("org.robolectric:robolectric:4.13")
+    testImplementation("androidx.room:room-testing:2.6.1")
     testImplementation("androidx.test:core-ktx:1.6.1")
     testImplementation("androidx.test.ext:junit:1.2.1")
     testImplementation(composeBom)

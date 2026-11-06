@@ -85,7 +85,10 @@ Drop: greetings and filler. Write in the language of the conversation, as concis
             toFold.forEach { m ->
                 val who = if (m.role == ROLE_ASSISTANT) "Assistant" else "User"
                 val body = if (m.role == ROLE_ASSISTANT) stripThinking(m.content) else m.content
-                append(who).append(": ").append(body.take(4000)).append("\n\n")
+                val files = Attachments.parse(m.attachments)
+                append(who).append(": ").append(body.take(4000))
+                if (files.isNotEmpty()) append(" [Ekler: ").append(files.joinToString { it.name }).append("]")
+                append("\n\n")
             }
         }
         return listOf(ChatMessageDto("system", system), ChatMessageDto("user", user))

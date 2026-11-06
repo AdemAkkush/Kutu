@@ -15,6 +15,12 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
@@ -43,7 +49,10 @@ import androidx.compose.ui.unit.dp
 import com.kutu.chat.data.db.MessageEntity
 import com.kutu.chat.data.db.ROLE_USER
 import com.kutu.chat.data.db.STATUS_ERROR
+import com.kutu.chat.domain.Attachments
 import com.kutu.chat.domain.Generation
+import com.kutu.chat.domain.Versions
+import com.kutu.chat.ui.components.AttachmentStrip
 import com.kutu.chat.domain.splitThinking
 import com.kutu.chat.ui.components.MarkdownView
 
@@ -52,8 +61,10 @@ import com.kutu.chat.ui.components.MarkdownView
 fun UserMessage(
     message: MessageEntity,
     onEdit: () -> Unit,
+    onDelete: () -> Unit,
     enabled: Boolean,
 ) {
+    val attachments = remember(message.attachments) { Attachments.parse(message.attachments) }
     val clipboard = LocalClipboardManager.current
     var menu by remember { mutableStateOf(false) }
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
@@ -66,11 +77,13 @@ fun UserMessage(
                     .widthIn(max = 320.dp)
                     .combinedClickable(onClick = {}, onLongClick = { menu = true }),
             ) {
-                Text(
-                    text = message.content,
-                    style = MaterialTheme.typography.bodyLarge,
+                Column(
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                )
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    if (attachments.isNotEmpty()) AttachmentStrip(attachments)
+                    if (message.content.isNotBlank()) Text(text = message.content, style = MaterialTheme.typography.bodyLarge)
+                }
             }
             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                 DropdownMenuItem(
@@ -89,6 +102,14 @@ fun UserMessage(
                             onEdit()
                         },
                     )
+                    DropdownMenuItem(
+                        text = { Text("Sil") },
+                        leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) },
+                        onClick = {
+                            menu = false
+                            onDelete()
+                        },
+                    )
                 }
             }
         }
@@ -100,10 +121,17 @@ fun AssistantMessage(
     message: MessageEntity,
     generation: Generation?,
     isLast: Boolean,
+    speaking: Boolean,
+    canEdit: Boolean,
     onRegenerate: () -> Unit,
     onShare: (String) -> Unit,
     onPickModel: () -> Unit,
+    onSpeak: (String) -> Unit,
+    onDelete: () -> Unit,
+    onVersion: (Int) -> Unit,
 ) {
+    val versionCount = remember(message.versions) { Versions.count(message) }
+    var overflow by remember { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
     val streaming = generation != null && generation.messageId == message.id
     val rawText = if (streaming) generation!!.text else message.content
@@ -158,12 +186,41 @@ fun AssistantMessage(
                 IconButton(onClick = { clipboard.setText(AnnotatedString(split.answer)) }) {
                     Icon(Icons.Default.ContentCopy, contentDescription = "Kopyala", modifier = Modifier.size(18.dp))
                 }
-                IconButton(onClick = { onShare(split.answer) }) {
-                    Icon(Icons.Default.Share, contentDescription = "Paylaş", modifier = Modifier.size(18.dp))
+                IconButton(onClick = { onSpeak(split.answer) }) {
+                    Icon(
+                        if (speaking) Icons.Default.Stop else Icons.AutoMirrored.Filled.VolumeUp,
+                        contentDescription = if (speaking) "Okumayı durdur" else "Sesli oku",
+                        modifier = Modifier.size(18.dp),
+                    )
                 }
                 if (isLast) {
                     IconButton(onClick = onRegenerate) {
                         Icon(Icons.Default.Refresh, contentDescription = "Yeniden üret", modifier = Modifier.size(18.dp))
+                    }
+                }
+                if (versionCount > 1 && canEdit) {
+                    val active = message.activeVersion.coerceIn(0, versionCount - 1)
+                    IconButton(onClick = { onVersion(active - 1) }, enabled = active > 0) {
+                        Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "Önceki sürüm", modifier = Modifier.size(20.dp))
+                    }
+                    Text(
+                        "${active + 1}/$versionCount",
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.align(Alignment.CenterVertically),
+                    )
+                    IconButton(onClick = { onVersion(active + 1) }, enabled = active < versionCount - 1) {
+                        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "Sonraki sürüm", modifier = Modifier.size(20.dp))
+                    }
+                }
+                if (canEdit) {
+                    Box {
+                        IconButton(onClick = { overflow = true }) {
+                            Icon(Icons.Default.MoreVert, contentDescription = "Diğer", modifier = Modifier.size(18.dp))
+                        }
+                        DropdownMenu(expanded = overflow, onDismissRequest = { overflow = false }) {
+                            DropdownMenuItem(text = { Text("Paylaş") }, onClick = { overflow = false; onShare(split.answer) })
+                            DropdownMenuItem(text = { Text("Bu yanıtı sil") }, onClick = { overflow = false; onDelete() })
+                        }
                     }
                 }
             }

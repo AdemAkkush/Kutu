@@ -13,6 +13,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.PushPin
@@ -54,6 +55,7 @@ fun DrawerContent(
     onOpenChat: (Long) -> Unit,
     onChatDeleted: (Long) -> Unit,
     onOpenMemory: () -> Unit,
+    onOpenPersonas: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
     val chats by vm.chats.collectAsStateWithLifecycle()
@@ -117,6 +119,13 @@ fun DrawerContent(
             }
 
             HorizontalDivider()
+            NavigationDrawerItem(
+                icon = { Icon(Icons.Default.Face, contentDescription = null) },
+                label = { Text("Kişiler ve şablonlar") },
+                selected = false,
+                onClick = onOpenPersonas,
+                modifier = Modifier.padding(horizontal = 12.dp),
+            )
             NavigationDrawerItem(
                 icon = { Icon(Icons.Default.Psychology, contentDescription = null) },
                 label = { Text("Hafıza") },

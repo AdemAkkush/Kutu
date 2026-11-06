@@ -14,6 +14,21 @@ Kotlin + Jetpack Compose (Material 3) ile yazıldı; `https://integrate.api.nvid
 - Hata durumunda anlaşılır mesajlar (401/404/429…) ve "Tekrar dene"
 - Bir sohbeti Markdown olarak paylaşma
 
+**Ekler ve ses**
+- **Resim ekleme:** galeriden (6'ya kadar) ya da kameradan; görsel anlayan modellere sorulabilir (`gemma-4-31b-it`, `llama-3.2-90b-vision`, `nemotron-3.5-super-vl`, `minimax`…). Resimler gönderilmeden önce 1536 px'e küçültülür, EXIF yönüne göre döndürülür
+- **Metin/kod dosyası ekleme:** içeriği mesaja eklenir; ikili dosyalar reddedilir, çok uzun dosyalar kesilir
+- **Sesle yazma:** mikrofon düğmesi (cihazın konuşma tanıması); **sesli okuma:** yanıtın altındaki hoparlör düğmesi (Markdown/kod blokları okunmaz)
+
+**Kişilikler ve şablonlar**
+- 6 hazır kişilik (kod asistanı, çevirmen, editör, öğretmen, özetleyici, sohbet arkadaşı) + kendi kişiliklerin (ad, simge, sistem istemi, isteğe bağlı model)
+- Yeni sohbet ekranından tek dokunuşla kişilikle başla; kişilik sohbet başlığında görünür
+- ✨ düğmesiyle hızlı komut şablonları (hazır + kendi şablonların)
+
+**Yönetim**
+- Yeniden üretince eski yanıt silinmez: **‹ 2/3 ›** ile sürümler arasında gez
+- Tek mesajı silme, sohbet içinde arama (sonuçlar arasında gezinme)
+- **Yedekleme:** tüm sohbetler, ekler, hafıza, kişilikler ve şablonlar tek ZIP dosyasına aktarılır / geri yüklenir (tekrar içe aktarmak kopya oluşturmaz; API anahtarı yedeğe girmez)
+
 **Model seçimi**
 - API'den canlı model listesi (`/v1/models`), arama, favoriler
 - Listede olmayan bir modeli kimliğini yazarak doğrudan kullanabilirsiniz
@@ -42,7 +57,7 @@ Gereksinimler: JDK 17+ ve Android SDK (platform 35).
 ```bash
 echo "sdk.dir=/yol/android-sdk" > local.properties   # Android Studio bunu kendisi oluşturur
 ./gradlew :app:assembleDebug          # app/build/outputs/apk/debug/app-debug.apk
-./gradlew :app:testDebugUnitTest      # 41 test: API/SSE, bağlam, hafıza, Markdown, uçtan uca (Robolectric)
+./gradlew :app:testDebugUnitTest      # 69 test: API/SSE, bağlam, hafıza, Markdown, ekler, yedekleme, veritabanı göçü, uçtan uca (Robolectric)
 ```
 
 Ya da projeyi doğrudan Android Studio ile açın.

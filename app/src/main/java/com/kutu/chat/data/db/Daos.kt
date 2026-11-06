@@ -51,6 +51,9 @@ interface ChatDao {
     @Query("UPDATE chats SET pinned = :pinned WHERE id = :id")
     suspend fun setPinned(id: Long, pinned: Boolean)
 
+    @Query("SELECT * FROM chats ORDER BY id")
+    suspend fun listAll(): List<ChatEntity>
+
     @Query("UPDATE chats SET summary = :summary, summarizedUpTo = :upTo WHERE id = :id")
     suspend fun setSummary(id: Long, summary: String, upTo: Long)
 }
@@ -81,6 +84,15 @@ interface MessageDao {
 
     @Query("DELETE FROM messages WHERE id = :id")
     suspend fun delete(id: Long)
+
+    @Query("SELECT * FROM messages WHERE id = :id")
+    suspend fun get(id: Long): MessageEntity?
+
+    @Query("SELECT attachments FROM messages WHERE attachments != ''")
+    suspend fun allAttachmentJson(): List<String>
+
+    @Query("SELECT attachments FROM messages WHERE chatId = :chatId AND attachments != ''")
+    suspend fun attachmentJsonOfChat(chatId: Long): List<String>
 }
 
 @Dao
@@ -102,4 +114,40 @@ interface MemoryDao {
 
     @Query("DELETE FROM memories")
     suspend fun deleteAll()
+}
+
+@Dao
+interface PersonaDao {
+    @Query("SELECT * FROM personas ORDER BY createdAt")
+    fun observeAll(): Flow<List<PersonaEntity>>
+
+    @Query("SELECT * FROM personas ORDER BY createdAt")
+    suspend fun list(): List<PersonaEntity>
+
+    @Insert
+    suspend fun insert(persona: PersonaEntity): Long
+
+    @Update
+    suspend fun update(persona: PersonaEntity)
+
+    @Query("DELETE FROM personas WHERE id = :id")
+    suspend fun delete(id: Long)
+}
+
+@Dao
+interface TemplateDao {
+    @Query("SELECT * FROM templates ORDER BY createdAt")
+    fun observeAll(): Flow<List<TemplateEntity>>
+
+    @Query("SELECT * FROM templates ORDER BY createdAt")
+    suspend fun list(): List<TemplateEntity>
+
+    @Insert
+    suspend fun insert(template: TemplateEntity): Long
+
+    @Update
+    suspend fun update(template: TemplateEntity)
+
+    @Query("DELETE FROM templates WHERE id = :id")
+    suspend fun delete(id: Long)
 }

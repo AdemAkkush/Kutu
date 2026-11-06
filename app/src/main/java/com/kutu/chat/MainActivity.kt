@@ -24,7 +24,9 @@ import androidx.compose.material3.MaterialTheme
 import com.kutu.chat.ui.ChatListViewModel
 import com.kutu.chat.ui.ChatViewModel
 import com.kutu.chat.ui.MemoryViewModel
+import com.kutu.chat.ui.PersonasViewModel
 import com.kutu.chat.ui.SettingsViewModel
+import com.kutu.chat.ui.personas.PersonasScreen
 import com.kutu.chat.ui.chat.ChatScreen
 import com.kutu.chat.ui.chatlist.DrawerContent
 import com.kutu.chat.ui.memory.MemoryScreen
@@ -42,6 +44,7 @@ class MainActivity : ComponentActivity() {
             initializer { ChatListViewModel(container) }
             initializer { MemoryViewModel(container) }
             initializer { SettingsViewModel(container) }
+            initializer { PersonasViewModel(container) }
         }
         setContent {
             val settings by container.settings.settings.collectAsStateWithLifecycle()
@@ -77,6 +80,7 @@ private fun AppRoot(factory: androidx.lifecycle.ViewModelProvider.Factory) {
                         onOpenChat = { chatVm.openChat(it); scope.launch { drawerState.close() } },
                         onChatDeleted = { if (currentId == it) chatVm.newChat() },
                         onOpenMemory = { scope.launch { drawerState.close() }; nav.navigate("memory") },
+                        onOpenPersonas = { scope.launch { drawerState.close() }; nav.navigate("personas") },
                         onOpenSettings = { scope.launch { drawerState.close() }; nav.navigate("settings") },
                     )
                 },
@@ -87,8 +91,17 @@ private fun AppRoot(factory: androidx.lifecycle.ViewModelProvider.Factory) {
                     onOpenDrawer = { scope.launch { drawerState.open() } },
                     onOpenSettings = { nav.navigate("settings") },
                     onOpenMemory = { nav.navigate("memory") },
+                    onOpenPersonas = { nav.navigate("personas") },
                 )
             }
+        }
+        composable("personas") {
+            val vm: PersonasViewModel = viewModel(factory = factory)
+            PersonasScreen(
+                vm,
+                onBack = { nav.popBackStack() },
+                onStart = { persona -> chatVm.startChatWith(persona); nav.popBackStack() },
+            )
         }
         composable("memory") {
             val vm: MemoryViewModel = viewModel(factory = factory)

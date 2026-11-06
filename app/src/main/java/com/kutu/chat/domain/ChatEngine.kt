@@ -1,7 +1,9 @@
 package com.kutu.chat.domain
 
+import com.kutu.chat.data.AttachmentStore
 import com.kutu.chat.data.SettingsStore
 import com.kutu.chat.data.api.ApiException
+import com.kutu.chat.data.api.ChatMessageDto
 import com.kutu.chat.data.api.ChatRequest
 import com.kutu.chat.data.api.NvidiaApi
 import com.kutu.chat.data.api.StreamEvent
@@ -18,6 +20,7 @@ import com.kutu.chat.data.db.STATUS_STREAMING
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -42,6 +45,9 @@ sealed interface EngineEvent {
     data class MemoryChanged(val added: List<String>, val removed: Int) : EngineEvent
 }
 
+/** Yeniden üretimde yeni yer tutucuya aktarılan sürüm listesi. */
+private data class VersionCarry(val json: String, val active: Int)
+
 /**
  * Sohbetin tüm "beyni": yanıt üretimi (akış), kalıcılık, otomatik başlık, uzun sohbet özetleme ve
  * uzun süreli hafıza çıkarımı. Uygulama kapsamında çalıştığı için ekran değişse de üretim sürer.
@@ -50,6 +56,7 @@ class ChatEngine(
     private val db: AppDatabase,
     private val api: NvidiaApi,
     private val settingsStore: SettingsStore,
+    private val attachmentStore: AttachmentStore,
     private val scope: CoroutineScope,
 ) {
     private val chats = db.chatDao()
@@ -64,7 +71,7 @@ class ChatEngine(
 
     private val jobs = ConcurrentHashMap<Long, Job>()
 
-    /** Uygulama süreci yanıt sırasında öldüyse yarım kalan mesajları düzeltir. */
+    /** Uygulama süreci yanıt sırasında öldüyse yarım kalan mesajları düzeltir; sahipsiz ek dosyalarını siler. */
     suspend fun recoverInterrupted() {
         for (m in messages.streaming()) {
             if (m.content.isBlank() && m.reasoning.isBlank()) {
@@ -73,59 +80,124 @@ class ChatEngine(
                 messages.update(m.copy(status = STATUS_ERROR, error = "Yanıt yarıda kesildi."))
             }
         }
+        runCatching {
+            val referenced = messages.allAttachmentJson().flatMap { Attachments.parse(it) }.map { it.file }.toSet()
+            attachmentStore.sweep(referenced)
+        }
     }
 
-    suspend fun createChat(model: String): Long {
+    suspend fun createChat(model: String, systemPrompt: String = "", persona: String = ""): Long {
         val now = System.currentTimeMillis()
-        return chats.insert(ChatEntity(model = model, createdAt = now, updatedAt = now))
+        return chats.insert(
+            ChatEntity(model = model, systemPrompt = systemPrompt, persona = persona, createdAt = now, updatedAt = now),
+        )
+    }
+
+    suspend fun deleteChat(chatId: Long) {
+        stop(chatId)
+        val files = messages.attachmentJsonOfChat(chatId).flatMap { Attachments.parse(it) }
+        chats.delete(chatId)
+        attachmentStore.delete(files)
     }
 
     fun isGenerating(chatId: Long) = jobs[chatId]?.isActive == true
 
-    fun send(chatId: Long, text: String) {
+    fun send(chatId: Long, text: String, attachments: List<Attachment> = emptyList()) {
         val clean = text.trim()
-        if (clean.isEmpty() || isGenerating(chatId)) return
+        if ((clean.isEmpty() && attachments.isEmpty()) || isGenerating(chatId)) return
         launchGeneration(chatId) {
-            insertUserMessage(chatId, clean)
+            insertUserMessage(chatId, clean, attachments)
+            null
         }
     }
 
-    /** Son asistan yanıtını silip aynı bağlamla yeniden üretir. */
+    /**
+     * Son asistan yanıtını yeniden üretir. Eski yanıt silinmez, sürüm olarak saklanır
+     * (hatalı denemeler hariç) ve kullanıcı sürümler arasında gezinebilir.
+     */
     fun regenerate(chatId: Long) {
         if (isGenerating(chatId)) return
         launchGeneration(chatId) {
             val list = messages.list(chatId)
-            val lastUser = list.lastOrNull { it.role == ROLE_USER } ?: return@launchGeneration
-            val firstAssistantAfter = list.firstOrNull { it.id > lastUser.id }
-            if (firstAssistantAfter != null) {
-                invalidateSummaryIfNeeded(chatId, firstAssistantAfter.id)
-                messages.deleteFrom(chatId, firstAssistantAfter.id)
-            }
+            val lastUser = list.lastOrNull { it.role == ROLE_USER } ?: return@launchGeneration null
+            val old = list.firstOrNull { it.id > lastUser.id && it.role == ROLE_ASSISTANT }
+                ?: return@launchGeneration null
+            val versions = Versions.parse(old.versions).toMutableList()
+            val active = old.activeVersion.coerceIn(0, maxOf(0, versions.lastIndex))
+            if (versions.isEmpty()) versions.add(Versions.snapshot(old)) else versions[active] = Versions.snapshot(old)
+            if (old.status == STATUS_ERROR) versions.removeAt(if (versions.size > 1) active else 0)
+            versions.add(Version())
+            invalidateSummaryIfNeeded(chatId, old.id)
+            messages.deleteFrom(chatId, old.id)
+            VersionCarry(Versions.encode(versions), versions.lastIndex)
         }
     }
 
-    /** Bir kullanıcı mesajını düzenler, ondan sonraki her şeyi siler ve yeniden yanıtlatır. */
+    /** Bir kullanıcı mesajını düzenler (ekleri korunur), ondan sonraki her şeyi siler ve yeniden yanıtlatır. */
     fun editAndResend(chatId: Long, messageId: Long, newText: String) {
         val clean = newText.trim()
-        if (clean.isEmpty() || isGenerating(chatId)) return
+        if (isGenerating(chatId)) return
         launchGeneration(chatId) {
+            val original = messages.get(messageId) ?: return@launchGeneration null
+            val kept = Attachments.parse(original.attachments)
+            if (clean.isEmpty() && kept.isEmpty()) return@launchGeneration null
             invalidateSummaryIfNeeded(chatId, messageId)
+            // Sonraki mesajların (yeniden üretim sürümleri dahil) ekleri sahipsiz kalmasın.
+            val later = messages.list(chatId).filter { it.id > messageId }
+                .flatMap { Attachments.parse(it.attachments) }
             messages.deleteFrom(chatId, messageId)
-            insertUserMessage(chatId, clean)
+            attachmentStore.delete(later)
+            insertUserMessage(chatId, clean, kept)
+            null
         }
+    }
+
+    /** Tek bir mesajı siler. Kullanıcı mesajıysa hemen ardındaki yanıtı da siler. */
+    suspend fun deleteMessage(chatId: Long, messageId: Long) {
+        if (isGenerating(chatId)) return
+        val list = messages.list(chatId)
+        val index = list.indexOfFirst { it.id == messageId }
+        if (index < 0) return
+        val doomed = mutableListOf(list[index])
+        if (list[index].role == ROLE_USER) {
+            list.getOrNull(index + 1)?.takeIf { it.role == ROLE_ASSISTANT }?.let { doomed.add(it) }
+        }
+        invalidateSummaryIfNeeded(chatId, doomed.minOf { it.id })
+        doomed.forEach { messages.delete(it.id) }
+        attachmentStore.delete(doomed.flatMap { Attachments.parse(it.attachments) })
+    }
+
+    /** Asistan yanıtının başka bir sürümünü etkin yapar. */
+    suspend fun switchVersion(messageId: Long, target: Int) {
+        val m = messages.get(messageId) ?: return
+        if (isGenerating(m.chatId)) return
+        val versions = Versions.parse(m.versions).toMutableList()
+        if (target !in versions.indices) return
+        val active = m.activeVersion.coerceIn(0, versions.lastIndex)
+        if (target == active) return
+        versions[active] = Versions.snapshot(m)
+        messages.update(
+            Versions.apply(m, versions[target]).copy(versions = Versions.encode(versions), activeVersion = target),
+        )
     }
 
     fun stop(chatId: Long) {
         jobs[chatId]?.cancel()
     }
 
-    private suspend fun insertUserMessage(chatId: Long, text: String) {
+    private suspend fun insertUserMessage(chatId: Long, text: String, attachments: List<Attachment>) {
         val now = System.currentTimeMillis()
-        messages.insert(MessageEntity(chatId = chatId, role = ROLE_USER, content = text, createdAt = now))
+        messages.insert(
+            MessageEntity(
+                chatId = chatId, role = ROLE_USER, content = text, createdAt = now,
+                attachments = Attachments.encode(attachments),
+            ),
+        )
         chats.touch(chatId, now)
         val chat = chats.get(chatId)
         if (chat != null && !chat.titleLocked && chat.title == DEFAULT_CHAT_TITLE) {
-            chats.setTitle(chatId, text.replace(Regex("\\s+"), " ").take(40), false)
+            val seed = text.ifBlank { attachments.firstOrNull()?.name.orEmpty() }
+            if (seed.isNotBlank()) chats.setTitle(chatId, seed.replace(Regex("\\s+"), " ").take(40), false)
         }
     }
 
@@ -136,21 +208,24 @@ class ChatEngine(
         }
     }
 
-    private fun launchGeneration(chatId: Long, prepare: suspend () -> Unit) {
+    private fun launchGeneration(chatId: Long, prepare: suspend () -> VersionCarry?) {
         val job = scope.launch {
-            prepare()
-            runGeneration(chatId)
+            val carry = prepare()
+            runGeneration(chatId, carry)
         }
         jobs[chatId] = job
         job.invokeOnCompletion { jobs.remove(chatId, job) }
     }
 
-    private suspend fun runGeneration(chatId: Long) {
+    private suspend fun runGeneration(chatId: Long, carry: VersionCarry?) {
         val settings = settingsStore.settings.value
         val chat = chats.get(chatId) ?: return
         val history = messages.list(chatId)
         val mems = if (settings.memoryEnabled) memories.list() else emptyList()
-        val context = ContextBuilder.build(settings, chat, mems, history)
+        val context = withContext(Dispatchers.IO) {
+            ContextBuilder.build(settings, chat, mems, history, source = attachmentStore)
+        }
+        val hadImages = context.any { it.images.isNotEmpty() }
 
         val placeholder = MessageEntity(
             chatId = chatId,
@@ -159,6 +234,8 @@ class ChatEngine(
             model = chat.model,
             status = STATUS_STREAMING,
             createdAt = System.currentTimeMillis(),
+            versions = carry?.json.orEmpty(),
+            activeVersion = carry?.active ?: 0,
         )
         val messageId = messages.insert(placeholder)
         var current = placeholder.copy(id = messageId)
@@ -206,6 +283,10 @@ class ChatEngine(
         } catch (e: ApiException) {
             failure = e.message ?: "Bilinmeyen hata"
             markUnavailableIfGone(e, chat.model)
+            if (hadImages && e.code in IMAGE_REJECT_CODES) {
+                failure += "\n\nBu model görselleri desteklemiyor olabilir. Görsel destekli bir model seçin " +
+                    "(örn. gemma-4-31b-it) ya da görseli kaldırıp tekrar deneyin."
+            }
         } catch (e: Exception) {
             failure = "Beklenmeyen hata: ${e.message ?: e.javaClass.simpleName}"
         }
@@ -232,7 +313,15 @@ class ChatEngine(
 
     private suspend fun finish(chatId: Long, base: MessageEntity, text: String, reasoning: String, error: String?) {
         if (error == null && text.isBlank() && reasoning.isBlank()) {
-            messages.delete(base.id)
+            val versions = Versions.parse(base.versions)
+            if (versions.size > 1) {
+                // Boş kalan yeni sürümü at, önceki sürüme dön.
+                val rest = versions.toMutableList().also { it.removeAt(base.activeVersion.coerceIn(0, it.lastIndex)) }
+                val target = (base.activeVersion - 1).coerceIn(0, rest.lastIndex)
+                messages.update(Versions.apply(base, rest[target]).copy(versions = Versions.encode(rest), activeVersion = target))
+            } else {
+                messages.delete(base.id)
+            }
             return
         }
         messages.update(
@@ -255,7 +344,7 @@ class ChatEngine(
     }
 
     /** Arka plan modeli çalışmıyorsa sohbet modeline düşer; 404/410 alan model işaretlenir. */
-    private suspend fun background(prompt: List<com.kutu.chat.data.api.ChatMessageDto>, maxTokens: Int): String {
+    private suspend fun background(prompt: List<ChatMessageDto>, maxTokens: Int): String {
         val settings = settingsStore.settings.value
         val preferred = settings.memoryModel.ifBlank { settings.defaultModel }
         val candidates = listOf(preferred, settings.defaultModel)
@@ -290,8 +379,9 @@ class ChatEngine(
         if (list.size > 4) return
         val user = list.firstOrNull { it.role == ROLE_USER } ?: return
         val assistant = list.firstOrNull { it.role == ROLE_ASSISTANT } ?: return
+        val userText = user.content.ifBlank { Attachments.parse(user.attachments).joinToString { it.name } }
         val title = MemoryLogic.cleanTitle(
-            background(MemoryLogic.titleMessages(user.content, stripThinking(assistant.content)), 40),
+            background(MemoryLogic.titleMessages(userText, stripThinking(assistant.content)), 40),
         )
         if (title.isNotBlank()) {
             val fresh = chats.get(chatId) ?: return
@@ -326,9 +416,9 @@ class ChatEngine(
         val settings = settingsStore.settings.value
         val chat = chats.get(chatId) ?: return
         val pending = messages.list(chatId).filter {
-            it.id > chat.summarizedUpTo && it.status == STATUS_DONE && it.content.isNotBlank()
+            it.id > chat.summarizedUpTo && it.status == STATUS_DONE && (it.content.isNotBlank() || it.attachments.isNotBlank())
         }
-        val tokens = pending.sumOf { TokenEstimator.estimate(it.content) }
+        val tokens = pending.sumOf { TokenEstimator.estimate(it) }
         if (tokens < settings.contextTokens * SUMMARY_TRIGGER) return
         if (pending.size <= KEEP_RECENT + 1) return
 
@@ -343,5 +433,6 @@ class ChatEngine(
         const val DB_THROTTLE_MS = 1500L
         const val SUMMARY_TRIGGER = 0.7
         const val KEEP_RECENT = 6
+        val IMAGE_REJECT_CODES = setOf(400, 415, 422)
     }
 }

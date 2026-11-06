@@ -2,6 +2,8 @@ package com.kutu.chat.ui.settings
 
 import android.content.Intent
 import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -65,6 +67,12 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit, onOpenMemory: () -
     var picker by remember { mutableStateOf<PickerTarget?>(null) }
     var systemPrompt by remember(settings.systemPrompt) { mutableStateOf(settings.systemPrompt) }
     var tested by remember { mutableStateOf(false) }
+    val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+        if (uri != null) vm.exportBackup(uri)
+    }
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) vm.importBackup(uri)
+    }
 
     Scaffold(
         topBar = {
@@ -164,6 +172,25 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit, onOpenMemory: () -
                 modifier = Modifier.fillMaxWidth(),
             )
             TextButton(onClick = { vm.update { it.copy(systemPrompt = DEFAULT_SYSTEM_PROMPT) } }) { Text("Varsayılana döndür") }
+
+            HorizontalDivider()
+            Section("Yedekleme")
+            Text(
+                "Tüm sohbetleri, eklerini, hafızayı, kişilikleri ve şablonları tek bir ZIP dosyasına aktarın; " +
+                    "yeni telefonda içe aktarın. API anahtarı yedeğe dahil edilmez.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(enabled = !vm.backupBusy, onClick = {
+                    exportLauncher.launch("kutu-yedek-" + java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US).format(java.util.Date()) + ".zip")
+                }) { Text("Dışa aktar") }
+                OutlinedButton(enabled = !vm.backupBusy, onClick = { importLauncher.launch(arrayOf("application/zip", "application/octet-stream", "*/*")) }) {
+                    Text("İçe aktar")
+                }
+            }
+            if (vm.backupBusy) Text("İşleniyor…", style = MaterialTheme.typography.bodySmall)
+            vm.backupStatus?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = if (it.startsWith("Hata")) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary) }
 
             HorizontalDivider()
             Section("Görünüm")

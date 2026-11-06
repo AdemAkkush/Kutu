@@ -1,5 +1,6 @@
 package com.kutu.chat.data.db
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
@@ -30,6 +31,8 @@ data class ChatEntity(
     val pinned: Boolean = false,
     val createdAt: Long,
     val updatedAt: Long,
+    /** Sohbet bir kişiyle başlatıldıysa görünen adı (örn. "💻 Kod asistanı"). */
+    @ColumnInfo(defaultValue = "''") val persona: String = "",
 )
 
 @Entity(
@@ -54,6 +57,11 @@ data class MessageEntity(
     val status: Int = STATUS_DONE,
     val error: String = "",
     val createdAt: Long,
+    /** Ekler (resim / metin dosyası) JSON listesi, bkz. [com.kutu.chat.domain.Attachments]. */
+    @ColumnInfo(defaultValue = "''") val attachments: String = "",
+    /** Yanıt sürümleri (yeniden üretimler) JSON listesi; boşsa tek sürüm. */
+    @ColumnInfo(defaultValue = "''") val versions: String = "",
+    @ColumnInfo(defaultValue = "0") val activeVersion: Int = 0,
 )
 
 /** Tüm sohbetlerde geçerli uzun süreli hafıza kaydı. */
@@ -65,4 +73,25 @@ data class MemoryEntity(
     val sourceChatId: Long = 0,
     val createdAt: Long,
     val updatedAt: Long,
+)
+
+/** Kullanıcının oluşturduğu asistan kişiliği (hazır olanlar kodda tanımlıdır). */
+@Entity(tableName = "personas")
+data class PersonaEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val emoji: String = "🤖",
+    val systemPrompt: String,
+    /** Boşsa varsayılan model kullanılır. */
+    val model: String = "",
+    val createdAt: Long,
+)
+
+/** Giriş alanına tek dokunuşla eklenen hızlı komut şablonu. */
+@Entity(tableName = "templates")
+data class TemplateEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val title: String,
+    val text: String,
+    val createdAt: Long,
 )

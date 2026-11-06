@@ -1,10 +1,71 @@
 package com.kutu.chat.data.api
 
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.descriptors.buildClassSerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonDecoder
+import kotlinx.serialization.json.JsonEncoder
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 
-@Serializable
-data class ChatMessageDto(val role: String, val content: String)
+/**
+ * [images] doluysa OpenAI uyumlu çok kipli biçimde gönderilir:
+ * `content: [{type:text,…},{type:image_url,image_url:{url:"data:image/jpeg;base64,…"}}]`.
+ */
+@Serializable(with = ChatMessageSerializer::class)
+data class ChatMessageDto(val role: String, val content: String, val images: List<String> = emptyList())
+
+object ChatMessageSerializer : KSerializer<ChatMessageDto> {
+    override val descriptor: SerialDescriptor = buildClassSerialDescriptor("com.kutu.chat.ChatMessage")
+
+    override fun serialize(encoder: Encoder, value: ChatMessageDto) {
+        val json = encoder as JsonEncoder
+        json.encodeJsonElement(
+            buildJsonObject {
+                put("role", value.role)
+                if (value.images.isEmpty()) {
+                    put("content", value.content)
+                } else {
+                    put(
+                        "content",
+                        buildJsonArray {
+                            add(buildJsonObject { put("type", "text"); put("text", value.content) })
+                            value.images.forEach { url ->
+                                add(
+                                    buildJsonObject {
+                                        put("type", "image_url")
+                                        put("image_url", buildJsonObject { put("url", url) })
+                                    },
+                                )
+                            }
+                        },
+                    )
+                }
+            },
+        )
+    }
+
+    override fun deserialize(decoder: Decoder): ChatMessageDto {
+        val obj = (decoder as JsonDecoder).decodeJsonElement().jsonObject
+        val role = obj["role"]?.jsonPrimitive?.content.orEmpty()
+        val content = when (val c = obj["content"]) {
+            is JsonArray -> c.mapNotNull { (it as? JsonObject)?.get("text")?.jsonPrimitive?.content }.joinToString("\n")
+            is JsonPrimitive -> c.content
+            else -> ""
+        }
+        return ChatMessageDto(role, content)
+    }
+}
 
 @Serializable
 data class ChatRequest(

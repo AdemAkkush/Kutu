@@ -15,6 +15,17 @@ import java.time.format.DateTimeFormatter
 object TokenEstimator {
     /** Kaba tahmin: Türkçe ve kod için ~3 karakter ≈ 1 token alınır (temkinli). */
     fun estimate(text: String): Int = text.length / 3 + 4
+
+    /** Bir resmin kabaca kaç token tuttuğu. */
+    const val IMAGE_TOKENS = 1100
+
+    fun estimate(m: ChatMessageDto): Int = estimate(m.content) + m.images.size * IMAGE_TOKENS
+
+    /** Bir mesajın ekleriyle birlikte tahmini tokenı (özetleme eşiği için). */
+    fun estimate(m: MessageEntity): Int =
+        estimate(m.content) + Attachments.parse(m.attachments).sumOf {
+            if (it.type == ATT_TEXT) (it.size / 3).toInt() else IMAGE_TOKENS
+        }
 }
 
 /**
@@ -23,6 +34,7 @@ object TokenEstimator {
  */
 object ContextBuilder {
     private const val MAX_MEMORY_CHARS = 4000
+    private const val IMAGE_WINDOW = 4
 
     fun build(
         settings: AppSettings,
@@ -30,14 +42,15 @@ object ContextBuilder {
         memories: List<MemoryEntity>,
         history: List<MessageEntity>,
         now: ZonedDateTime = ZonedDateTime.now(ZoneId.systemDefault()),
+        source: AttachmentSource? = null,
     ): List<ChatMessageDto> {
         val system = buildSystemPrompt(settings, chat, memories, now)
-        val usable = usableMessages(chat, history)
+        val usable = usableMessages(chat, history, source)
         val budget = (settings.contextTokens - TokenEstimator.estimate(system)).coerceAtLeast(1000)
         val trimmed = trimToBudget(usable, budget)
         return buildList {
             add(ChatMessageDto("system", system))
-            trimmed.forEach { add(ChatMessageDto(it.role, it.content)) }
+            addAll(trimmed)
         }
     }
 
@@ -73,29 +86,53 @@ object ContextBuilder {
     }
 
     /** Özetlenmemiş, dolu ve başarılı mesajlar; düşünce kısmı atılmış, ardışık aynı roller birleştirilmiş. */
-    fun usableMessages(chat: ChatEntity, history: List<MessageEntity>): List<ChatMessageDto> {
+    fun usableMessages(
+        chat: ChatEntity,
+        history: List<MessageEntity>,
+        source: AttachmentSource? = null,
+    ): List<ChatMessageDto> {
+        val kept = history.filter {
+            it.id > chat.summarizedUpTo &&
+                (it.role == ROLE_USER || it.role == ROLE_ASSISTANT) &&
+                !(it.role == ROLE_ASSISTANT && it.status != STATUS_DONE)
+        }
+        // Resimler yalnızca son birkaç mesajda gerçekten gönderilir; eskileri yer tutucuya indirilir.
+        val imageFrom = kept.size - IMAGE_WINDOW
         val out = ArrayList<ChatMessageDto>()
-        for (m in history) {
-            if (m.id <= chat.summarizedUpTo) continue
-            if (m.role != ROLE_USER && m.role != ROLE_ASSISTANT) continue
-            if (m.role == ROLE_ASSISTANT && m.status != STATUS_DONE) continue
-            val text = if (m.role == ROLE_ASSISTANT) stripThinking(m.content) else m.content.trim()
-            if (text.isBlank()) continue
+        kept.forEachIndexed { index, m ->
+            var text = if (m.role == ROLE_ASSISTANT) stripThinking(m.content) else m.content.trim()
+            val images = ArrayList<String>()
+            if (m.role == ROLE_USER && m.attachments.isNotBlank()) {
+                val extra = StringBuilder()
+                for (a in Attachments.parse(m.attachments)) {
+                    if (a.type == ATT_TEXT) {
+                        val body = source?.text(a)
+                        if (body != null) extra.append("\n\n[Ek dosya: ${a.name}]\n```\n$body\n```")
+                        else extra.append("\n\n[Ek dosya: ${a.name} – okunamadı]")
+                    } else {
+                        val url = if (index >= imageFrom) source?.imageDataUrl(a) else null
+                        if (url != null) images.add(url) else extra.append("\n[Görsel: ${a.name}]")
+                    }
+                }
+                text = (text + extra).trim()
+                if (text.isBlank() && images.isNotEmpty()) text = "Ekli görseli incele."
+            }
+            if (text.isBlank() && images.isEmpty()) return@forEachIndexed
             val last = out.lastOrNull()
             if (last != null && last.role == m.role) {
-                out[out.size - 1] = last.copy(content = last.content + "\n\n" + text)
+                out[out.size - 1] = last.copy(content = last.content + "\n\n" + text, images = last.images + images)
             } else {
-                out.add(ChatMessageDto(m.role, text))
+                out.add(ChatMessageDto(m.role, text, images))
             }
         }
         return out
     }
 
     fun trimToBudget(messages: List<ChatMessageDto>, budgetTokens: Int): List<ChatMessageDto> {
-        var total = messages.sumOf { TokenEstimator.estimate(it.content) }
+        var total = messages.sumOf { TokenEstimator.estimate(it) }
         var start = 0
         while (start < messages.size - 1 && total > budgetTokens) {
-            total -= TokenEstimator.estimate(messages[start].content)
+            total -= TokenEstimator.estimate(messages[start])
             start++
         }
         var result = messages.subList(start, messages.size)
