@@ -34,6 +34,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.kutu.chat.data.ModelsRepository
@@ -45,6 +46,7 @@ fun ModelPickerSheet(
     current: String,
     state: ModelsState,
     favorites: Set<String>,
+    unavailable: Set<String> = emptySet(),
     onSelect: (String) -> Unit,
     onToggleFavorite: (String) -> Unit,
     onRefresh: () -> Unit,
@@ -54,11 +56,11 @@ fun ModelPickerSheet(
     var showAll by remember { mutableStateOf(false) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
-    val filtered = remember(state.models, query, showAll, favorites) {
+    val filtered = remember(state.models, query, showAll, favorites, unavailable) {
         state.models
             .filter { showAll || ModelsRepository.isChatModel(it) }
             .filter { query.isBlank() || it.contains(query.trim(), ignoreCase = true) }
-            .sortedWith(compareByDescending<String> { it in favorites }.thenBy { it })
+            .sortedWith(compareBy<String> { it in unavailable }.thenByDescending { it in favorites }.thenBy { it })
     }
     val typed = query.trim()
     val canUseTyped = typed.isNotEmpty() && typed.contains('/') && state.models.none { it == typed }
@@ -126,6 +128,8 @@ fun ModelPickerSheet(
                         id,
                         selected = id == current,
                         favorite = id in favorites,
+                        subtitle = if (id in unavailable) "Çalışmıyor (404/410) – kaldırılmış ya da hesabınıza kapalı" else null,
+                        dimmed = id in unavailable,
                         onClick = { onSelect(id) },
                         onToggleFavorite = { onToggleFavorite(id) },
                     )
@@ -141,12 +145,14 @@ private fun ModelRow(
     selected: Boolean,
     favorite: Boolean,
     subtitle: String? = null,
+    dimmed: Boolean = false,
     onClick: () -> Unit,
     onToggleFavorite: (() -> Unit)?,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .alpha(if (dimmed) 0.5f else 1f)
             .clickable(onClick = onClick)
             .padding(vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,

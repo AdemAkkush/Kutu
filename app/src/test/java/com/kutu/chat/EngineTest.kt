@@ -26,6 +26,7 @@ class EngineTest {
     private lateinit var server: MockWebServer
     private val requests = java.util.concurrent.CopyOnWriteArrayList<String>()
     @Volatile private var failStream = false
+    @Volatile private var failCode = 429
     @Volatile private var answer = "Cevap 1"
 
     @Before fun setUp() {
@@ -36,7 +37,7 @@ class EngineTest {
                 requests += body
                 return when {
                     body.contains("\"stream\":true") && failStream ->
-                        MockResponse().setResponseCode(429).setBody("""{"detail":"Too many requests"}""")
+                        MockResponse().setResponseCode(failCode).setBody("""{"detail":"Too many requests"}""")
                     body.contains("\"stream\":true") -> MockResponse().setHeader("Content-Type", "text/event-stream").setBody(
                         """data: {"choices":[{"delta":{"content":"$answer"}}]}""" + "\n\ndata: [DONE]\n\n",
                     )
@@ -123,6 +124,21 @@ class EngineTest {
         assertTrue(!req.contains("m1 xxx") && !req.contains("m6 xxx"))
         assertTrue(req.contains("m7 xxx"))
         assertTrue(req.contains("yeni soru"))
+    }
+
+    @Test fun goneModelIsMarkedUnavailableAndOnlyThinkingIsReportedAsError() {
+        val id = newChat()
+        failStream = true
+        failCode = 410
+        container.engine.send(id, "merhaba")
+        until { messages(id).lastOrNull()?.status == STATUS_ERROR && idle(id) }
+        assertTrue(messages(id).last().error.contains("410"))
+        assertTrue("meta/llama-3.3-70b-instruct" in container.settings.settings.value.unavailableModels)
+
+        failStream = false
+        answer = "<think>düşünüyorum</think>"
+        container.engine.regenerate(id)
+        until { messages(id).lastOrNull()?.status == STATUS_ERROR && messages(id).last().error.contains("yalnızca düşündü") && idle(id) }
     }
 
     @Test fun deletingChatCascadesToMessages() {

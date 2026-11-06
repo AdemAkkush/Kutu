@@ -205,13 +205,22 @@ class ChatEngine(
             throw e
         } catch (e: ApiException) {
             failure = e.message ?: "Bilinmeyen hata"
+            markUnavailableIfGone(e, chat.model)
         } catch (e: Exception) {
             failure = "Beklenmeyen hata: ${e.message ?: e.javaClass.simpleName}"
         }
 
         val finalText = text.toString()
-        if (failure == null && finalText.isBlank() && reasoning.isBlank()) {
-            failure = "Model boş yanıt döndürdü. Başka bir model deneyin ya da tekrar üretin."
+        if (failure == null) {
+            val split = splitThinking(finalText, reasoning.toString())
+            failure = when {
+                finalText.isBlank() && reasoning.isBlank() ->
+                    "Model boş yanıt döndürdü. Başka bir model deneyin ya da tekrar üretin."
+                split.answer.isBlank() ->
+                    "Model yalnızca düşündü ve cevaba geçemedi (token sınırı dolmuş olabilir). " +
+                        "Ayarlar'dan maksimum yanıt uzunluğunu artırın ya da düşünmeyen bir model seçin."
+                else -> null
+            }
         }
         finish(chatId, current, finalText, reasoning.toString(), failure)
         _generations.update { it - chatId }
@@ -245,18 +254,33 @@ class ChatEngine(
         runCatching { summarizeIfNeeded(chatId) }
     }
 
+    /** Arka plan modeli çalışmıyorsa sohbet modeline düşer; 404/410 alan model işaretlenir. */
     private suspend fun background(prompt: List<com.kutu.chat.data.api.ChatMessageDto>, maxTokens: Int): String {
         val settings = settingsStore.settings.value
-        return api.complete(
-            settings,
-            ChatRequest(
-                model = settings.memoryModel.ifBlank { settings.defaultModel },
-                messages = prompt,
-                stream = false,
-                temperature = 0f,
-                maxTokens = maxTokens,
-            ),
-        )
+        val preferred = settings.memoryModel.ifBlank { settings.defaultModel }
+        val candidates = listOf(preferred, settings.defaultModel)
+            .filter { it.isNotBlank() && it !in settings.unavailableModels }
+            .distinct()
+        var last: ApiException? = null
+        for (model in candidates) {
+            try {
+                return api.complete(
+                    settings,
+                    ChatRequest(model = model, messages = prompt, stream = false, temperature = 0f, maxTokens = maxTokens),
+                )
+            } catch (e: ApiException) {
+                markUnavailableIfGone(e, model)
+                last = e
+                if (e.code != 404 && e.code != 410) throw e
+            }
+        }
+        throw last ?: ApiException("Kullanılabilir arka plan modeli yok.")
+    }
+
+    private fun markUnavailableIfGone(e: ApiException, model: String) {
+        if (e.code == 404 || e.code == 410) {
+            settingsStore.update { it.copy(unavailableModels = it.unavailableModels + model) }
+        }
     }
 
     private suspend fun generateTitle(chatId: Long) {

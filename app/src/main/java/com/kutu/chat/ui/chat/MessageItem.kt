@@ -102,6 +102,7 @@ fun AssistantMessage(
     isLast: Boolean,
     onRegenerate: () -> Unit,
     onShare: (String) -> Unit,
+    onPickModel: () -> Unit,
 ) {
     val clipboard = LocalClipboardManager.current
     val streaming = generation != null && generation.messageId == message.id
@@ -143,7 +144,10 @@ fun AssistantMessage(
                 Column(modifier = Modifier.padding(12.dp)) {
                     Text(message.error, style = MaterialTheme.typography.bodyMedium)
                     if (isLast) {
-                        TextButton(onClick = onRegenerate) { Text("Tekrar dene") }
+                        Row {
+                            TextButton(onClick = onRegenerate) { Text("Tekrar dene") }
+                            TextButton(onClick = onPickModel) { Text("Model değiştir") }
+                        }
                     }
                 }
             }

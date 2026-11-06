@@ -192,6 +192,7 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit, onOpenMemory: () -
             current = current,
             state = modelsState,
             favorites = settings.favoriteModels,
+            unavailable = settings.unavailableModels,
             onSelect = { id ->
                 vm.update { if (target == PickerTarget.DEFAULT) it.copy(defaultModel = id) else it.copy(memoryModel = id) }
                 picker = null

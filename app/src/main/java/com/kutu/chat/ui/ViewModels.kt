@@ -16,6 +16,10 @@ import com.kutu.chat.domain.EngineEvent
 import com.kutu.chat.domain.Generation
 import com.kutu.chat.domain.splitThinking
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -25,7 +29,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalCoroutinesApi::class)
+@OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
 class ChatViewModel(private val c: AppContainer) : ViewModel() {
     private val chatDao = c.db.chatDao()
     private val messageDao = c.db.messageDao()
@@ -65,8 +69,13 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             currentChatId.value = (existing ?: chatDao.latest())?.id
             ready.value = true
         }
-        if (modelsState.value.models.isEmpty() && c.settings.settings.value.apiKey.isNotBlank()) {
-            refreshModels()
+        // API anahtarı girilince/değişince model listesini (ve çalışan varsayılanları) otomatik yenile.
+        viewModelScope.launch {
+            c.settings.settings
+                .map { it.apiKey.trim() }
+                .distinctUntilChanged()
+                .debounce(1200)
+                .collect { key -> if (key.isNotBlank()) c.models.refresh() }
         }
     }
 

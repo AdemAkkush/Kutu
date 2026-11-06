@@ -26,6 +26,7 @@ class ModelsRepository(
         try {
             val models = api.listModels(settings.settings.value)
             settings.saveModels(models)
+            settings.update { heal(it, models) }
             _state.value = ModelsState(models = models)
         } catch (e: ApiException) {
             _state.update { it.copy(loading = false, error = e.message) }
@@ -37,7 +38,28 @@ class ModelsRepository(
     }
 
     companion object {
-        private val NON_CHAT = listOf("embed", "rerank", "reward", "retriever", "nvclip", "clip", "-parse", "paddleocr", "whisper", "tts", "riva")
+        private val NON_CHAT = listOf(
+            "embed", "rerank", "reward", "retriever", "nvclip", "clip", "parse", "paddleocr", "whisper", "tts",
+            "guard", "safety", "topic-control", "deplot", "kosmos", "fuyu", "neva", "vila", "calibration", "synthetic-video",
+        )
+
+        val PREFERRED_CHAT = listOf("google/gemma-4-31b-it", "minimaxai/minimax-m3.1-flash", "nvidia/nemotron-3-ultra-550b-a55b", "poolside/laguna-xs-2.1")
+        val PREFERRED_BACKGROUND = listOf("nvidia/nemotron-3.5-bolt-e4b", "poolside/laguna-xs-2.1", "minimaxai/minimax-m3.1-flash")
+
+        /**
+         * Seçili sohbet/arka plan modeli listede yoksa ya da çalışmıyorsa çalışan bir modele geçirir.
+         * (NVIDIA modelleri sık sık kaldırıyor; eski bir seçim uygulamayı bozmamalı.)
+         */
+        fun heal(s: AppSettings, models: List<String>): AppSettings {
+            if (models.isEmpty()) return s
+            fun ok(m: String) = m in models && m !in s.unavailableModels
+            val chatModels = models.filter { isChatModel(it) && it !in s.unavailableModels }
+            val chat = if (ok(s.defaultModel)) s.defaultModel
+                else PREFERRED_CHAT.firstOrNull(::ok) ?: chatModels.firstOrNull() ?: s.defaultModel
+            val background = if (ok(s.memoryModel)) s.memoryModel
+                else PREFERRED_BACKGROUND.firstOrNull(::ok) ?: chat
+            return s.copy(defaultModel = chat, memoryModel = background)
+        }
 
         /** Sohbete uygun olmayan (embedding, rerank vb.) modelleri ayıklar. */
         fun isChatModel(id: String): Boolean {

@@ -132,7 +132,7 @@ class NvidiaApi(
 
         fun defaultClient(): OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(20, TimeUnit.SECONDS)
-            .readTimeout(180, TimeUnit.SECONDS)
+            .readTimeout(90, TimeUnit.SECONDS)
             .writeTimeout(60, TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
             .build()
@@ -151,15 +151,19 @@ class NvidiaApi(
             return StreamEvent.Chunk(content, reasoning)
         }
 
-        private fun networkError(e: IOException) =
-            ApiException("Bağlantı hatası: ${e.message ?: e.javaClass.simpleName}")
+        private fun networkError(e: IOException) = when (e) {
+            is java.net.SocketTimeoutException ->
+                ApiException("Model 90 saniye içinde yanıt vermedi. Model yoğun ya da kapalı olabilir; başka bir model deneyin.")
+            else -> ApiException("Bağlantı hatası: ${e.message ?: e.javaClass.simpleName}")
+        }
 
         private fun httpError(res: Response): ApiException {
             val raw = runCatching { res.body?.string().orEmpty() }.getOrDefault("")
             val detail = extractErrorMessage(raw)
             val prefix = when (res.code) {
                 401, 403 -> "Yetkilendirme hatası (${res.code}): API anahtarınızı kontrol edin."
-                404 -> "Bulunamadı (404): model kimliği hatalı ya da bu modele erişiminiz yok."
+                404 -> "Model kullanılamıyor (404): kaldırılmış ya da hesabınıza kapalı olabilir. Başka bir model seçin."
+                410 -> "Model artık yok (410): NVIDIA bu modeli kaldırmış. Başka bir model seçin."
                 429 -> "İstek sınırı aşıldı (429): biraz bekleyip tekrar deneyin."
                 else -> "Sunucu hatası (${res.code})"
             }

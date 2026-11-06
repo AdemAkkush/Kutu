@@ -9,8 +9,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 const val DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1"
-const val DEFAULT_MODEL = "meta/llama-3.3-70b-instruct"
-const val DEFAULT_MEMORY_MODEL = "meta/llama-3.1-8b-instruct"
+const val DEFAULT_MODEL = "google/gemma-4-31b-it"
+const val DEFAULT_MEMORY_MODEL = "nvidia/nemotron-3.5-bolt-e4b"
 
 val DEFAULT_SYSTEM_PROMPT = """
 Sen yardımsever, dürüst ve bilgili bir yapay zeka asistanısın.
@@ -39,6 +39,8 @@ data class AppSettings(
     val autoMemory: Boolean = true,
     val theme: ThemeMode = ThemeMode.SYSTEM,
     val favoriteModels: Set<String> = emptySet(),
+    /** 404/410 dönen (kaldırılmış ya da hesaba kapalı) modeller. Seçicide en sona atılır. */
+    val unavailableModels: Set<String> = emptySet(),
     val lastChatId: Long = 0,
 )
 
@@ -83,6 +85,7 @@ class SettingsStore(private val context: Context) {
             autoMemory = prefs.getBoolean("autoMemory", d.autoMemory),
             theme = runCatching { ThemeMode.valueOf(prefs.getString("theme", "") ?: "") }.getOrDefault(d.theme),
             favoriteModels = prefs.getStringSet("favoriteModels", emptySet())?.toSet() ?: emptySet(),
+            unavailableModels = prefs.getStringSet("unavailableModels", emptySet())?.toSet() ?: emptySet(),
             lastChatId = prefs.getLong("lastChatId", 0),
         )
     }
@@ -101,6 +104,7 @@ class SettingsStore(private val context: Context) {
             .putBoolean("autoMemory", s.autoMemory)
             .putString("theme", s.theme.name)
             .putStringSet("favoriteModels", s.favoriteModels)
+            .putStringSet("unavailableModels", s.unavailableModels)
             .putLong("lastChatId", s.lastChatId)
             .apply()
     }

@@ -194,6 +194,7 @@ fun ChatScreen(
                         isGenerating = isGenerating,
                         onEdit = { id, text -> editing = id to text },
                         onShare = ::share,
+                        onPickModel = { showModelPicker = true },
                     )
                 }
             }
@@ -212,6 +213,7 @@ fun ChatScreen(
             current = activeModel,
             state = modelsState,
             favorites = settings.favoriteModels,
+            unavailable = settings.unavailableModels,
             onSelect = { vm.selectModel(it); showModelPicker = false },
             onToggleFavorite = vm::toggleFavorite,
             onRefresh = vm::refreshModels,
@@ -257,6 +259,7 @@ private fun MessageList(
     isGenerating: Boolean,
     onEdit: (Long, String) -> Unit,
     onShare: (String) -> Unit,
+    onPickModel: () -> Unit,
 ) {
     val messages by vm.messages.collectAsStateWithLifecycle()
     val reversed = remember(messages) { messages.asReversed() }
@@ -287,6 +290,7 @@ private fun MessageList(
                         isLast = isLast && !isGenerating,
                         onRegenerate = vm::regenerate,
                         onShare = onShare,
+                        onPickModel = onPickModel,
                     )
                 }
             }
