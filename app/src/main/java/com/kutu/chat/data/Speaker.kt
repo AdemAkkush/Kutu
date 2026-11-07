@@ -5,6 +5,7 @@ import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import com.kutu.chat.domain.TtsEngine
+import com.kutu.chat.domain.TtsPlanner
 import java.util.Locale
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -15,6 +16,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+
+/** Cihazın metin okuma motorundaki bir ses. */
+data class DeviceVoice(val name: String, val language: String, val network: Boolean, val quality: Int)
 
 /**
  * Yanıtları sesli okur. İki motor vardır:
@@ -32,6 +36,12 @@ class Speaker(
     private var tts: TextToSpeech? = null
     private var ready = false
     private var pending: (() -> Unit)? = null
+    private var pendingLoad: (() -> Unit)? = null
+    @Volatile private var voiceOverride: String? = null
+
+    /** Cihazın metin okuma motorunda yüklü sesler. [loadDeviceVoices] ile doldurulur. */
+    private val _deviceVoices = MutableStateFlow<List<DeviceVoice>>(emptyList())
+    val deviceVoices: StateFlow<List<DeviceVoice>> = _deviceVoices.asStateFlow()
 
     private var aiJob: Job? = null
     @Volatile private var activePlayer: PcmPlayer? = null
@@ -58,7 +68,28 @@ class Speaker(
         if (text.isBlank()) return
         stop()
         val s = settingsStore.settings.value
-        if (s.ttsEngine == TtsEngine.NVIDIA && s.apiKey.isNotBlank()) speakAi(messageId, text, s) else speakDevice(messageId, text)
+        val turkishOnDevice = s.ttsTurkishOnDevice && TtsPlanner.detectLanguage(text, Locale.getDefault().language) == "tr"
+        if (s.ttsEngine == TtsEngine.NVIDIA && s.apiKey.isNotBlank() && !turkishOnDevice) speakAi(messageId, text, s)
+        else speakDevice(messageId, text)
+    }
+
+    /** Ayarlardaki örnek için: belirli bir cihaz sesini dinletir. */
+    fun previewDeviceVoice(voiceName: String, messageId: Long, text: String) {
+        stop()
+        voiceOverride = voiceName
+        speakDevice(messageId, text)
+    }
+
+    fun loadDeviceVoices() {
+        val load = {
+            _deviceVoices.value = tts?.voices.orEmpty().map {
+                DeviceVoice(it.name, it.locale.toLanguageTag(), it.isNetworkConnectionRequired, it.quality)
+            }.sortedWith(compareBy<DeviceVoice> { !it.language.startsWith("tr") }.thenBy { it.language }.thenByDescending { it.quality }.thenBy { it.name })
+        }
+        if (ready) load() else {
+            pendingLoad = load
+            if (tts == null) initDevice()
+        }
     }
 
     fun stop() {
@@ -67,6 +98,7 @@ class Speaker(
         activePlayer?.release()
         activePlayer = null
         pending = null
+        voiceOverride = null
         tts?.stop()
         _preparing.value = false
         _speaking.value = null
@@ -91,6 +123,7 @@ class Speaker(
                 val prepared = ai.prepare(text, s, Locale.getDefault().language)
                 val chunks = chunk(text, prepared.maxChars)
                 val player = playerFactory(prepared.sampleRate).also { activePlayer = it }
+                val voice = VoiceProcessor(prepared.sampleRate, s.ttsSpeed, s.ttsPitch)
                 coroutineScope {
                     // Üretici, oynatıcıdan önde gider: bir parça çalarken sonrakiler üretilir.
                     val audio = Channel<ByteArray>(PREFETCH_PIECES)
@@ -106,8 +139,9 @@ class Speaker(
                     }
                     for (pcm in audio) {
                         if (!started) { started = true; _preparing.value = false }
-                        player.write(pcm)
+                        player.write(voice.process(pcm))
                     }
+                    voice.finish().takeIf { it.isNotEmpty() }?.let { player.write(it) }
                     player.drain()
                 }
             } catch (e: CancellationException) {
@@ -140,7 +174,14 @@ class Speaker(
         val start = {
             val engine = tts
             if (engine != null) {
-                applyLanguage(engine, text)
+                val s = settingsStore.settings.value
+                val locale = applyLanguage(engine, text)
+                engine.setSpeechRate(s.ttsSpeed.coerceIn(VoiceProcessor.MIN_SPEED, VoiceProcessor.MAX_SPEED))
+                engine.setPitch(s.ttsPitch.coerceIn(VoiceProcessor.MIN_PITCH, VoiceProcessor.MAX_PITCH))
+                val wanted = voiceOverride ?: s.ttsDeviceVoice
+                if (wanted.isNotBlank()) {
+                    engine.voices?.firstOrNull { it.name == wanted && it.locale.language == locale.language }?.let { engine.voice = it }
+                }
                 val chunks = chunk(text, minOf(TextToSpeech.getMaxSpeechInputLength(), MAX_CHUNK))
                 chunks.forEachIndexed { i, part ->
                     engine.speak(part, TextToSpeech.QUEUE_ADD, Bundle(), "$messageId:$i:${chunks.size}")
@@ -170,6 +211,8 @@ class Speaker(
                 })
                 pending?.invoke()
                 pending = null
+                pendingLoad?.invoke()
+                pendingLoad = null
             } else {
                 _speaking.value = null
                 _error.value = "Cihazda metin okuma motoru bulunamadı."
@@ -177,13 +220,15 @@ class Speaker(
         }
     }
 
-    private fun applyLanguage(engine: TextToSpeech, text: String) {
+    private fun applyLanguage(engine: TextToSpeech, text: String): Locale {
         val locale = if (looksTurkish(text)) Locale("tr", "TR") else Locale.getDefault()
         val result = engine.setLanguage(locale)
         if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
             engine.setLanguage(Locale.US)
             _error.value = "“${locale.displayLanguage}” ses verisi yüklü değil; Ayarlar > Metin okuma bölümünden indirin."
+            return Locale.US
         }
+        return locale
     }
 
     companion object {

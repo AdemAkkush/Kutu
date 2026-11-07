@@ -52,6 +52,13 @@ data class AppSettings(
     val ttsModel: TtsModel = TtsModel.AUTO,
     /** Magpie için tercih edilen konuşmacı (örn. Aria). */
     val ttsVoice: String = "Aria",
+    /** Konuşma hızı (1.0 = normal) ve ses tonu (1.0 = normal); iki motor için de geçerli. */
+    val ttsSpeed: Float = 1.0f,
+    val ttsPitch: Float = 1.0f,
+    /** NVIDIA motoru seçiliyken Türkçe metinleri cihazın (çok sesli) motoruyla oku. */
+    val ttsTurkishOnDevice: Boolean = false,
+    /** Cihaz motoru için seçilen ses adı (boşsa varsayılan). */
+    val ttsDeviceVoice: String = "",
 )
 
 /**
@@ -114,6 +121,10 @@ class SettingsStore(private val context: Context) {
             ttsEngine = runCatching { TtsEngine.valueOf(prefs.getString("ttsEngine", "") ?: "") }.getOrDefault(d.ttsEngine),
             ttsModel = runCatching { TtsModel.valueOf(prefs.getString("ttsModel", "") ?: "") }.getOrDefault(d.ttsModel),
             ttsVoice = prefs.getString("ttsVoice", d.ttsVoice) ?: d.ttsVoice,
+            ttsSpeed = prefs.getFloat("ttsSpeed", d.ttsSpeed),
+            ttsPitch = prefs.getFloat("ttsPitch", d.ttsPitch),
+            ttsTurkishOnDevice = prefs.getBoolean("ttsTurkishOnDevice", d.ttsTurkishOnDevice),
+            ttsDeviceVoice = prefs.getString("ttsDeviceVoice", d.ttsDeviceVoice) ?: d.ttsDeviceVoice,
         )
     }
 
@@ -138,6 +149,10 @@ class SettingsStore(private val context: Context) {
             .putString("ttsEngine", s.ttsEngine.name)
             .putString("ttsModel", s.ttsModel.name)
             .putString("ttsVoice", s.ttsVoice)
+            .putFloat("ttsSpeed", s.ttsSpeed)
+            .putFloat("ttsPitch", s.ttsPitch)
+            .putBoolean("ttsTurkishOnDevice", s.ttsTurkishOnDevice)
+            .putString("ttsDeviceVoice", s.ttsDeviceVoice)
             .apply()
     }
 

@@ -387,9 +387,13 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     val speakerPreparing: StateFlow<Boolean> get() = c.speaker.preparing
     val speakerError: StateFlow<String?> get() = c.speaker.error
     fun clearSpeakerError() = c.speaker.clearError()
+    val deviceVoices: StateFlow<List<com.kutu.chat.data.DeviceVoice>> get() = c.speaker.deviceVoices
+    fun loadDeviceVoices() = c.speaker.loadDeviceVoices()
+    fun previewDeviceVoice(name: String, text: String) = c.speaker.previewDeviceVoice(name, -3, text)
+    fun stopSpeaking() = c.speaker.stop()
 
-    /** Seçili ses ayarlarıyla kısa bir örnek okutur (id -1 = örnek). */
-    fun speakSample(text: String) = c.speaker.toggle(-1, text)
+    /** Seçili ses ayarlarıyla kısa bir örnek okutur (id -1 = Türkçe, -2 = İngilizce örnek). */
+    fun speakSample(id: Long, text: String) = c.speaker.toggle(id, text)
 
     fun refreshModels() {
         viewModelScope.launch { c.models.refresh() }

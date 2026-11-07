@@ -92,7 +92,7 @@ class TtsTest {
             if (functionId == staleId) throw RivaException("yok", grpcStatus = 5)
             calls += "$functionId|$languageCode|$voiceName|$sampleRate|${text.take(12)}"
             delay(30)
-            return ByteArray(text.length * 2) { 1 }
+            return ByteArray(text.length * 200) { 1 }   // ~karakter başına 4 ms ses
         }
         override suspend fun findFunctionId(apiKey: String, functionName: String) = newId
     }
@@ -148,6 +148,52 @@ class TtsTest {
         // Tek bir devasa cümle bile sınırı aşmamalı.
         val oneSentence = "kelime ".repeat(300)
         assertTrue(Speaker.chunk(oneSentence, 470).all { it.length <= 470 })
+    }
+
+    private class SizedPlayer(val rate: Int) : PcmPlayer {
+        val bytes = java.util.concurrent.atomic.AtomicLong()
+        override suspend fun write(pcm: ByteArray) { bytes.addAndGet(pcm.size.toLong()) }
+        override suspend fun drain() {}
+        override fun release() {}
+    }
+
+    @Test fun speedSettingShortensTheAudioThatReachesThePlayer() {
+        val service = FakeService(mapOf(TtsModel.CHATTERBOX.defaultFunctionId to chatterbox))
+        fun played(speed: Float): Long {
+            settings.update { it.copy(apiKey = "k", ttsEngine = TtsEngine.NVIDIA, ttsModel = TtsModel.AUTO, ttsSpeed = speed, ttsPitch = 1f, ttsTurkishOnDevice = false) }
+            val players = CopyOnWriteArrayList<SizedPlayer>()
+            val sp = Speaker(app, settings, CoroutineScope(SupervisorJob() + Dispatchers.Default), AiSpeech(service, settings)) { r -> SizedPlayer(r).also { players += it } }
+            sp.speak(1, turkishLong)
+            waitFor { sp.speaking.value == null && players.isNotEmpty() }
+            return players.single().bytes.get()
+        }
+        val normal = played(1f)
+        val fast = played(2f)
+        val slow = played(0.5f)
+        assertTrue("2x hızda yarı süre: $fast / $normal", fast.toDouble() / normal in 0.42..0.58)
+        assertTrue("0.5x hızda iki kat süre: $slow / $normal", slow.toDouble() / normal in 1.8..2.2)
+    }
+
+    @Test fun turkishCanBeRoutedToTheDeviceVoiceWhileOtherLanguagesStayOnAi() {
+        val service = FakeService(mapOf(TtsModel.CHATTERBOX.defaultFunctionId to chatterbox, TtsModel.MAGPIE.defaultFunctionId to magpie))
+        val players = CopyOnWriteArrayList<FakePlayer>()
+        val speaker = speaker(service, players)
+        settings.update { it.copy(ttsTurkishOnDevice = true) }
+        speaker.speak(1, "Merhaba, bugün hava çok güzel ve ben yürüyüşe çıkıyorum.")
+        Thread.sleep(400)
+        assertTrue("Türkçe yapay zekâ servisine gitmemeli", service.calls.isEmpty() && players.isEmpty())
+        speaker.stop()
+        speaker.speak(2, "Hello, how are you today? I hope this is fine for you and your friends.")
+        waitFor { service.calls.isNotEmpty() }
+        assertTrue(service.calls.first().contains("|en-US|Magpie-Multilingual.EN-US.Aria|"))
+        speaker.stop()
+    }
+
+    @Test fun voiceSettingsSurviveARestart() {
+        settings.update { it.copy(ttsSpeed = 1.35f, ttsPitch = 0.85f, ttsTurkishOnDevice = true, ttsDeviceVoice = "tr-tr-x-abc-local", ttsVoice = "Leo") }
+        val reloaded = com.kutu.chat.data.SettingsStore(app).settings.value
+        assertEquals(1.35f, reloaded.ttsSpeed, 0.001f); assertEquals(0.85f, reloaded.ttsPitch, 0.001f)
+        assertTrue(reloaded.ttsTurkishOnDevice); assertEquals("tr-tr-x-abc-local", reloaded.ttsDeviceVoice); assertEquals("Leo", reloaded.ttsVoice)
     }
 
     @Test fun stopCancelsPlaybackAndReleasesThePlayer() {

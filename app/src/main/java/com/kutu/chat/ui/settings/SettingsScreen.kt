@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
@@ -19,6 +21,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -51,6 +55,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kutu.chat.data.DEFAULT_BASE_URL
 import com.kutu.chat.data.DEFAULT_SYSTEM_PROMPT
 import com.kutu.chat.data.ThemeMode
+import com.kutu.chat.data.VoiceProcessor
 import com.kutu.chat.domain.Capabilities
 import com.kutu.chat.domain.MAGPIE_SPEAKERS
 import com.kutu.chat.domain.TtsEngine
@@ -192,7 +197,7 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit, onOpenMemory: () -
             Section("Seslendirme")
             Text(
                 "Yanıtların altındaki hoparlör düğmesi yanıtı sesli okur. NVIDIA'nın yapay zekâ sesleri (Chatterbox, Magpie) " +
-                    "cihaz sesinden çok daha doğaldır; Türkçe için Chatterbox kullanılır. Hata olursa cihaz sesine geçilir.",
+                    "cihaz sesinden çok daha doğaldır. Hata olursa otomatik olarak cihaz sesine geçilir.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -217,17 +222,21 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit, onOpenMemory: () -
                         ) { Text(model.label) }
                     }
                 }
-                Text(
-                    when (settings.ttsModel) {
-                        TtsModel.AUTO -> "Otomatik: Türkçe ve Magpie'nin bilmediği diller Chatterbox ile, İngilizce vb. Magpie ile okunur."
-                        TtsModel.CHATTERBOX -> "Chatterbox: Türkçe dahil 23 dil, tek erkek ses."
-                        TtsModel.MAGPIE -> "Magpie: İngilizce, İspanyolca, Fransızca, Almanca, Çince, İtalyanca, Japonca, Korece, Arapça, Hintçe, Portekizce, Vietnamca. Türkçe yok; Türkçe metin Chatterbox'a yönlendirilir."
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh)) {
+                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("Hangi dilde kaç ses var?", style = MaterialTheme.typography.labelLarge)
+                        Text(
+                            "• Türkçe (Chatterbox): tek erkek ses; konuşmacı seçilemez, ses klonlama da kapalı.\n" +
+                                "• İngilizce, İspanyolca, Fransızca, Almanca, İtalyanca, Portekizce, Çince, Japonca, Korece, Arapça, Hintçe, Vietnamca (Magpie): " +
+                                "10 konuşmacı arasından seçilir.\n" +
+                                "• Türkçede farklı ses (örn. kadın sesi) istiyorsanız aşağıdaki “Türkçeyi cihaz sesiyle oku” seçeneğini açın.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+                ToggleRow("Türkçeyi cihaz sesiyle oku (daha çok ses seçeneği)", settings.ttsTurkishOnDevice) { v -> vm.update { it.copy(ttsTurkishOnDevice = v) } }
                 if (settings.ttsModel != TtsModel.CHATTERBOX) {
-                    Text("Magpie konuşmacısı", style = MaterialTheme.typography.labelLarge)
+                    Text("Magpie konuşmacısı (Türkçe dışındaki diller için)", style = MaterialTheme.typography.labelLarge)
                     Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         MAGPIE_SPEAKERS.forEach { name ->
                             androidx.compose.material3.FilterChip(
@@ -239,15 +248,46 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit, onOpenMemory: () -
                     }
                 }
             }
+
+            LabeledSlider("Konuşma hızı", "%.2fx".format(settings.ttsSpeed), settings.ttsSpeed, VoiceProcessor.MIN_SPEED..VoiceProcessor.MAX_SPEED, 29) { v ->
+                vm.update { it.copy(ttsSpeed = (Math.round(v * 20) / 20f)) }
+            }
+            LabeledSlider("Ses tonu", if (settings.ttsPitch < 0.995f) "daha kalın" else if (settings.ttsPitch > 1.005f) "daha ince" else "normal", settings.ttsPitch, VoiceProcessor.MIN_PITCH..VoiceProcessor.MAX_PITCH, 13) { v ->
+                vm.update { it.copy(ttsPitch = (Math.round(v * 20) / 20f)) }
+            }
+            if (settings.ttsSpeed != 1f || settings.ttsPitch != 1f) {
+                TextButton(onClick = { vm.update { it.copy(ttsSpeed = 1f, ttsPitch = 1f) } }) { Text("Hız ve tonu sıfırla") }
+            }
+            Text(
+                "Hız ve ton, hangi motor seçili olursa olsun uygulanır. Hız değişince sesin tonu bozulmaz.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            val usesDeviceVoice = settings.ttsEngine == TtsEngine.DEVICE || settings.ttsTurkishOnDevice
+            var showDeviceVoices by remember { mutableStateOf(false) }
+            if (usesDeviceVoice) {
+                OutlinedButton(onClick = { vm.loadDeviceVoices(); showDeviceVoices = true }, modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Text("Cihaz sesi", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(settings.ttsDeviceVoice.ifBlank { "Varsayılan (değiştirmek için dokunun)" }, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            }
+            if (showDeviceVoices) {
+                DeviceVoiceDialog(vm, settings.ttsDeviceVoice, onSelect = { name -> vm.update { it.copy(ttsDeviceVoice = name) } }, onDismiss = { vm.stopSpeaking(); showDeviceVoices = false })
+            }
+
             val speaking by vm.speaking.collectAsStateWithLifecycle()
             val preparing by vm.speakerPreparing.collectAsStateWithLifecycle()
             val speakerError by vm.speakerError.collectAsStateWithLifecycle()
+            val canSpeak = settings.ttsEngine == TtsEngine.DEVICE || settings.apiKey.isNotBlank()
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Button(
-                    enabled = settings.ttsEngine == TtsEngine.DEVICE || settings.apiKey.isNotBlank(),
-                    onClick = { vm.speakSample("Merhaba, ben Kutu. Yapay zekâ sesimi beğendin mi? This is how I sound in English.") },
-                ) {
-                    Text(if (speaking == -1L) (if (preparing) "Hazırlanıyor…" else "Durdur") else "Sesi dene")
+                Button(enabled = canSpeak, onClick = { vm.speakSample(-1, "Merhaba, ben Kutu. Bugün sana yardımcı olmak için buradayım.") }) {
+                    Text(if (speaking == -1L) (if (preparing) "Hazırlanıyor…" else "Durdur") else "Türkçe dene")
+                }
+                OutlinedButton(enabled = canSpeak, onClick = { vm.speakSample(-2, "Hello, I am Kutu. I am here to help you today.") }) {
+                    Text(if (speaking == -2L) (if (preparing) "Hazırlanıyor…" else "Durdur") else "İngilizce dene")
                 }
             }
             speakerError?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
@@ -350,4 +390,50 @@ private fun LabeledSlider(
         }
         Slider(value = value.coerceIn(range), onValueChange = onChange, valueRange = range, steps = steps)
     }
+}
+
+@Composable
+private fun DeviceVoiceDialog(vm: SettingsViewModel, selected: String, onSelect: (String) -> Unit, onDismiss: () -> Unit) {
+    val voices by vm.deviceVoices.collectAsStateWithLifecycle()
+    var onlyTurkish by remember { mutableStateOf(true) }
+    val shown = voices.filter { !onlyTurkish || it.language.startsWith("tr") }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Cihaz sesi seç") },
+        text = {
+            Column {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    androidx.compose.material3.FilterChip(selected = onlyTurkish, onClick = { onlyTurkish = true }, label = { Text("Türkçe") })
+                    androidx.compose.material3.FilterChip(selected = !onlyTurkish, onClick = { onlyTurkish = false }, label = { Text("Tüm diller") })
+                }
+                if (shown.isEmpty()) {
+                    Text(
+                        if (voices.isEmpty()) "Sesler yükleniyor… Cihazda metin okuma motoru yoksa Ayarlar > Metin okuma bölümünden kurun."
+                        else "Bu dil için cihazda ses yok. Ayarlar > Metin okuma > Ses verisi bölümünden Türkçe sesleri indirin.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(vertical = 12.dp),
+                    )
+                }
+                androidx.compose.foundation.lazy.LazyColumn(modifier = Modifier.heightIn(max = 360.dp)) {
+                    itemsIndexed(shown, key = { _, v -> v.name }) { index, v ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            androidx.compose.material3.RadioButton(selected = v.name == selected, onClick = { onSelect(v.name) })
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Ses ${index + 1} · " + java.util.Locale.forLanguageTag(v.language).displayName, style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    v.name + if (v.network) " · internet gerekir" else " · çevrimdışı",
+                                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            TextButton(onClick = {
+                                vm.previewDeviceVoice(v.name, if (v.language.startsWith("tr")) "Merhaba, ben Kutu. Bugün sana yardımcı olmak için buradayım." else "Hello, I am Kutu. I am here to help you today.")
+                            }) { Text("Dinle") }
+                        }
+                    }
+                }
+                TextButton(onClick = { onSelect("") }) { Text("Varsayılan sesi kullan") }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Tamam") } },
+    )
 }
