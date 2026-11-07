@@ -1,6 +1,7 @@
 package com.kutu.chat.ui.components
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Refresh
@@ -37,8 +39,26 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.kutu.chat.data.ModelsRepository
 import com.kutu.chat.data.ModelsState
+import com.kutu.chat.domain.Cap
+import com.kutu.chat.domain.Capabilities
+import com.kutu.chat.domain.ModelMeta
+
+/** Filtre çiplerinde gösterilen yetenekler (sohbet neredeyse hepsinde olduğu için çip yok). */
+private val FILTER_CAPS = listOf(Cap.VISION, Cap.REASONING, Cap.CODE, Cap.TRANSLATE, Cap.DOCUMENT, Cap.FAST, Cap.AGENT)
+
+/** Seçicideki bir satırın sıralama anahtarı: çalışmayanlar sona, sonra favoriler, sonra popülerlik. */
+internal fun pickerOrder(
+    models: List<ModelMeta>,
+    favorites: Set<String>,
+    unavailable: Set<String>,
+): List<ModelMeta> = models.sortedWith(
+    compareBy<ModelMeta> { it.id in unavailable }
+        .thenBy { it.inCatalog == false }
+        .thenByDescending { it.id in favorites }
+        .thenByDescending { it.popularity }
+        .thenBy { it.id },
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -47,6 +67,9 @@ fun ModelPickerSheet(
     state: ModelsState,
     favorites: Set<String>,
     unavailable: Set<String> = emptySet(),
+    describe: (String) -> ModelMeta,
+    /** Açılışta seçili gelecek yetenek filtresi (örn. resim eklenince görsel). */
+    initialCap: Cap? = null,
     onSelect: (String) -> Unit,
     onToggleFavorite: (String) -> Unit,
     onRefresh: () -> Unit,
@@ -54,13 +77,23 @@ fun ModelPickerSheet(
 ) {
     var query by remember { mutableStateOf("") }
     var showAll by remember { mutableStateOf(false) }
+    var capFilter by remember { mutableStateOf(initialCap) }
+    var onlyFavorites by remember { mutableStateOf(false) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
-    val filtered = remember(state.models, query, showAll, favorites, unavailable) {
-        state.models
-            .filter { showAll || ModelsRepository.isChatModel(it) }
-            .filter { query.isBlank() || it.contains(query.trim(), ignoreCase = true) }
-            .sortedWith(compareBy<String> { it in unavailable }.thenByDescending { it in favorites }.thenBy { it })
+    val metas = remember(state.models, state.catalog, favorites, unavailable, describe) { state.models.map(describe) }
+    val visible = remember(metas, showAll) { metas.filter { showAll || (it.chatCapable && it.inCatalog != false) } }
+    val counts = remember(visible) { FILTER_CAPS.associateWith { c -> visible.count { c in it.caps } } }
+    val hiddenCount = metas.size - visible.size
+
+    val filtered = remember(visible, query, capFilter, onlyFavorites, favorites, unavailable) {
+        pickerOrder(
+            visible
+                .filter { capFilter == null || capFilter in it.caps }
+                .filter { !onlyFavorites || it.id in favorites }
+                .filter { query.isBlank() || it.id.contains(query.trim(), ignoreCase = true) || it.display.contains(query.trim(), ignoreCase = true) },
+            favorites, unavailable,
+        )
     }
     val typed = query.trim()
     val canUseTyped = typed.isNotEmpty() && typed.contains('/') && state.models.none { it == typed }
@@ -68,7 +101,7 @@ fun ModelPickerSheet(
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         Column(
             modifier = Modifier
-                .fillMaxHeight(0.85f)
+                .fillMaxHeight(0.88f)
                 .padding(horizontal = 16.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -82,25 +115,46 @@ fun ModelPickerSheet(
             OutlinedTextField(
                 value = query,
                 onValueChange = { query = it },
-                placeholder = { Text("Ara veya model kimliği yaz (ör. meta/llama-3.3-70b-instruct)") },
+                placeholder = { Text("Ara veya model kimliği yaz") },
                 leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
             Row(
-                modifier = Modifier.padding(vertical = 8.dp),
+                modifier = Modifier.horizontalScroll(rememberScrollState()).padding(vertical = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
+                FilterChip(selected = capFilter == null && !onlyFavorites, onClick = { capFilter = null; onlyFavorites = false }, label = { Text("Tümü") })
+                FilterChip(selected = onlyFavorites, onClick = { onlyFavorites = !onlyFavorites }, label = { Text("⭐ Favoriler") })
+                FILTER_CAPS.forEach { cap ->
+                    val n = counts[cap] ?: 0
+                    if (n > 0 || capFilter == cap) {
+                        FilterChip(
+                            selected = capFilter == cap,
+                            onClick = { capFilter = if (capFilter == cap) null else cap },
+                            label = { Text("${cap.emoji} ${cap.label} $n") },
+                        )
+                    }
+                }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(
                     selected = showAll,
                     onClick = { showAll = !showAll },
-                    label = { Text("Tüm modeller") },
+                    label = { Text(if (hiddenCount > 0) "Tümünü göster (+$hiddenCount)" else "Tümünü göster") },
                 )
                 Text(
                     "${filtered.size} model",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.align(Alignment.CenterVertically),
+                )
+            }
+            if (state.catalog.isEmpty() && state.models.isNotEmpty()) {
+                Text(
+                    "Yetenek bilgisi alınamadı; gruplar model adından tahmin ediliyor.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp),
                 )
             }
             state.error?.let {
@@ -109,8 +163,11 @@ fun ModelPickerSheet(
             LazyColumn(modifier = Modifier.weight(1f)) {
                 if (canUseTyped) {
                     item {
-                        ModelRow(typed, selected = typed == current, favorite = false, subtitle = "Bu kimliği doğrudan kullan",
-                            onClick = { onSelect(typed) }, onToggleFavorite = null)
+                        ModelRow(
+                            title = typed, subtitle = "Bu kimliği doğrudan kullan", selected = typed == current,
+                            favorite = false, dimmed = false, warning = null, badges = "",
+                            onClick = { onSelect(typed) }, onToggleFavorite = null,
+                        )
                     }
                 }
                 if (state.models.isEmpty() && !state.loading) {
@@ -123,15 +180,24 @@ fun ModelPickerSheet(
                         )
                     }
                 }
-                items(filtered, key = { it }) { id ->
+                items(filtered, key = { it.id }) { meta ->
+                    val dead = meta.id in unavailable
+                    val warning = when {
+                        dead -> "Çalışmıyor (404/410): kaldırılmış ya da hesabınıza kapalı"
+                        meta.inCatalog == false -> "Katalogda yok: büyük olasılıkla kaldırılmış"
+                        meta.deprecation != null -> "${Capabilities.formatDate(meta.deprecation)} tarihinde kaldırılacak"
+                        else -> null
+                    }
                     ModelRow(
-                        id,
-                        selected = id == current,
-                        favorite = id in favorites,
-                        subtitle = if (id in unavailable) "Çalışmıyor (404/410) – kaldırılmış ya da hesabınıza kapalı" else null,
-                        dimmed = id in unavailable,
-                        onClick = { onSelect(id) },
-                        onToggleFavorite = { onToggleFavorite(id) },
+                        title = meta.display,
+                        subtitle = meta.id.substringBefore('/', ""),
+                        selected = meta.id == current,
+                        favorite = meta.id in favorites,
+                        dimmed = dead || meta.inCatalog == false,
+                        warning = warning,
+                        badges = meta.caps.filter { it != Cap.CHAT }.joinToString(" ") { it.emoji },
+                        onClick = { onSelect(meta.id) },
+                        onToggleFavorite = { onToggleFavorite(meta.id) },
                     )
                 }
             }
@@ -141,18 +207,20 @@ fun ModelPickerSheet(
 
 @Composable
 private fun ModelRow(
-    id: String,
+    title: String,
+    subtitle: String,
     selected: Boolean,
     favorite: Boolean,
-    subtitle: String? = null,
-    dimmed: Boolean = false,
+    dimmed: Boolean,
+    warning: String?,
+    badges: String,
     onClick: () -> Unit,
     onToggleFavorite: (() -> Unit)?,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .alpha(if (dimmed) 0.5f else 1f)
+            .alpha(if (dimmed) 0.55f else 1f)
             .clickable(onClick = onClick)
             .padding(vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -161,14 +229,14 @@ private fun ModelRow(
             if (selected) Icon(Icons.Default.Check, contentDescription = "Seçili", tint = MaterialTheme.colorScheme.primary)
         }
         Column(modifier = Modifier.weight(1f)) {
-            val owner = id.substringBefore('/', "")
-            val name = id.substringAfter('/')
-            Text(name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(
-                subtitle ?: owner,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(title, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                if (badges.isNotBlank()) Text(badges, style = MaterialTheme.typography.labelMedium)
+            }
+            Text(subtitle, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (warning != null) {
+                Text(warning, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+            }
         }
         if (onToggleFavorite != null) {
             IconButton(onClick = onToggleFavorite) {

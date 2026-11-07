@@ -67,6 +67,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     val pendingPersona = MutableStateFlow<PersonaDef?>(null)
 
     val speaking: StateFlow<Long?> get() = c.speaker.speaking
+    val speakerPreparing: StateFlow<Boolean> get() = c.speaker.preparing
     val speakerError: StateFlow<String?> get() = c.speaker.error
     fun clearSpeakerError() = c.speaker.clearError()
 
@@ -166,10 +167,11 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
 
     // ---- Ekler ----
 
-    fun addImage(uri: Uri) = attach { c.attachments.importImage(uri) }
-    fun addTextFile(uri: Uri) = attach { c.attachments.importText(uri) }
+    fun addImage(uri: Uri) = attach { listOf(c.attachments.importImage(uri)) }
+    fun addTextFile(uri: Uri) = attach { listOf(c.attachments.importText(uri)) }
+    fun addDocument(uri: Uri) = attach { c.attachments.importDocument(uri) }
 
-    private fun attach(load: suspend () -> Attachment) {
+    private fun attach(load: suspend () -> List<Attachment>) {
         if (pending.size >= MAX_PENDING) {
             attachError = "Bir mesaja en fazla $MAX_PENDING dosya eklenebilir."
             return
@@ -178,7 +180,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         attachError = null
         viewModelScope.launch {
             try {
-                pending.add(load())
+                load().forEach { if (pending.size < MAX_PENDING) pending.add(it) }
             } catch (e: AttachmentException) {
                 attachError = e.message
             } catch (e: Exception) {
@@ -380,6 +382,14 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     }
 
     fun update(block: (AppSettings) -> AppSettings) = c.settings.update(block)
+
+    val speaking: StateFlow<Long?> get() = c.speaker.speaking
+    val speakerPreparing: StateFlow<Boolean> get() = c.speaker.preparing
+    val speakerError: StateFlow<String?> get() = c.speaker.error
+    fun clearSpeakerError() = c.speaker.clearError()
+
+    /** Seçili ses ayarlarıyla kısa bir örnek okutur (id -1 = örnek). */
+    fun speakSample(text: String) = c.speaker.toggle(-1, text)
 
     fun refreshModels() {
         viewModelScope.launch { c.models.refresh() }

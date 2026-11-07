@@ -19,6 +19,19 @@ Kotlin + Jetpack Compose (Material 3) ile yazıldı; `https://integrate.api.nvid
 - **Metin/kod dosyası ekleme:** içeriği mesaja eklenir; ikili dosyalar reddedilir, çok uzun dosyalar kesilir
 - **Sesle yazma:** mikrofon düğmesi (cihazın konuşma tanıması); **sesli okuma:** yanıtın altındaki hoparlör düğmesi (Markdown/kod blokları okunmaz)
 
+**Belgeler (PDF, Excel, Word, PowerPoint)**
+- + menüsünden **Belge** ekleyin: PDF, `.xlsx`, `.docx`, `.pptx`, CSV ve her türlü metin/kod dosyası. Metin cihazda çıkarılır (PDF için PDFBox, Office dosyaları için ZIP+XML); dosyanız bu amaçla ayrıca bir yere yüklenmez
+- Excel: her sayfa CSV'ye çevrilir; tarih biçimli hücreler gerçek tarih olarak okunur, formül sonuçları, boş hücreler ve zengin metin korunur
+- **Uzun belgeler:** belge bağlama sığmıyorsa her soruda, sorunuzla en ilgili bölümler (sayfa/slayt etiketleriyle) seçilir; böylece yüzlerce sayfalık bir PDF'de bile "87. sayfadaki fatura vadesi kaç gün?" diye sorabilirsiniz
+- **Taranmış PDF** (metin katmanı yok): ilk 6 sayfa resim olarak eklenir, görsel anlayan bir model okur
+- Yanıttaki bir **tabloyu** altındaki düğmeyle CSV/Excel olarak paylaşabilirsiniz
+- Eski `.xls/.doc/.ppt` biçimleri desteklenmez (`.xlsx/.docx/.pptx` olarak kaydedin)
+
+**Yapay zekâ ile seslendirme**
+- Yanıtın altındaki hoparlör düğmesi, NVIDIA'nın **Chatterbox** (Türkçe dahil 23 dil) ve **Magpie** (12 dil, 10 konuşmacı) modelleriyle okur; parça parça sentezlenir, ilk parça çalarken sonrası üretilir
+- Dil metinden otomatik algılanır; Türkçe → Chatterbox, İngilizce vb. → Magpie. Hata olursa otomatik cihaz sesine geçer. Ayarlar'dan motor, model ve konuşmacı seçilir, "Sesi dene" düğmesi vardır
+- Sesler, NVIDIA'nın Riva gRPC servisinden (`grpc.nvcf.nvidia.com`) gelir; bu sade istemci OkHttp üzerinde, ağır gRPC kütüphaneleri olmadan yazıldı
+
 **Kişilikler ve şablonlar**
 - 6 hazır kişilik (kod asistanı, çevirmen, editör, öğretmen, özetleyici, sohbet arkadaşı) + kendi kişiliklerin (ad, simge, sistem istemi, isteğe bağlı model)
 - Yeni sohbet ekranından tek dokunuşla kişilikle başla; kişilik sohbet başlığında görünür
@@ -29,8 +42,11 @@ Kotlin + Jetpack Compose (Material 3) ile yazıldı; `https://integrate.api.nvid
 - Tek mesajı silme, sohbet içinde arama (sonuçlar arasında gezinme)
 - **Yedekleme:** tüm sohbetler, ekler, hafıza, kişilikler ve şablonlar tek ZIP dosyasına aktarılır / geri yüklenir (tekrar içe aktarmak kopya oluşturmaz; API anahtarı yedeğe girmez)
 
-**Model seçimi**
-- API'den canlı model listesi (`/v1/models`), arama, favoriler
+**Model seçimi — yeteneğe göre gruplama**
+- API'den canlı model listesi (`/v1/models`) + NVIDIA'nın herkese açık kataloğu (build.nvidia.com) birleştirilir
+- Filtre çipleri: ⭐ Favoriler, 👁 Görsel, 🧠 Düşünen, 💻 Kod, 🌍 Çeviri, 📄 Belge, ⚡ Hızlı, 🛠 Ajan; her modelde rozetler görünür, popüler olanlar üstte sıralanır
+- **Çalışmayan modeller ayıklanır:** `/v1/models` listesindeki modellerin yaklaşık yarısı gerçekte kaldırılmış durumda (404/410). Katalogda olmayanlar varsayılan olarak gizlenir (gerçek hesapta 14/14 çalışan model katalogda, 42/42 kaldırılmış model katalogda yok); kaldırılma tarihi yaklaşanlar uyarıyla gösterilir
+- Resim eklenmişken seçili model görsel anlamıyorsa, en iyi görsel model önerilir; uygulama hangi modelin resim kabul ettiğini kullandıkça kendisi öğrenir
 - Listede olmayan bir modeli kimliğini yazarak doğrudan kullanabilirsiniz
 
 **Hafıza ve süreklilik**
@@ -57,7 +73,7 @@ Gereksinimler: JDK 17+ ve Android SDK (platform 35).
 ```bash
 echo "sdk.dir=/yol/android-sdk" > local.properties   # Android Studio bunu kendisi oluşturur
 ./gradlew :app:assembleDebug          # app/build/outputs/apk/debug/app-debug.apk
-./gradlew :app:testDebugUnitTest      # 69 test: API/SSE, bağlam, hafıza, Markdown, ekler, yedekleme, veritabanı göçü, uçtan uca (Robolectric)
+./gradlew :app:testDebugUnitTest      # 102 test: API/SSE, bağlam, hafıza, Markdown, ekler, belgeler, yetenekler, seslendirme, yedekleme, veritabanı göçü, uçtan uca (Robolectric)
 ```
 
 Ya da projeyi doğrudan Android Studio ile açın.

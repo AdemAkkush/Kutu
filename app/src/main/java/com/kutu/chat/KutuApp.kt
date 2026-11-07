@@ -1,7 +1,9 @@
 package com.kutu.chat
 
 import android.app.Application
+import com.kutu.chat.data.AiSpeech
 import com.kutu.chat.data.AttachmentStore
+import com.kutu.chat.data.RivaTtsService
 import com.kutu.chat.data.BackupManager
 import com.kutu.chat.data.Speaker
 import com.kutu.chat.data.ModelsRepository
@@ -23,7 +25,7 @@ class AppContainer(val app: Application) {
     val attachments = AttachmentStore(app)
     val engine = ChatEngine(db, api, settings, attachments, scope)
     val backup = BackupManager(db, attachments)
-    val speaker by lazy { Speaker(app) }
+    val speaker by lazy { Speaker(app, settings, scope, AiSpeech(RivaTtsService(), settings)) }
 
     init {
         scope.launch { engine.recoverInterrupted() }

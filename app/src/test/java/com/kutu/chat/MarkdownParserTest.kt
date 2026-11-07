@@ -54,3 +54,12 @@ class MarkdownParserTest {
         assertTrue(b.single() is MdBlock.Paragraph)
     }
 }
+
+class TableCsvTest {
+    @Test fun tableBecomesExcelFriendlyCsv() {
+        val md = "| Ürün | Fiyat |\n|---|---|\n| **Elma, kırmızı** | 12,5 |\n| Armut | \"4\" |"
+        val csv = com.kutu.chat.ui.components.tableToCsv(parseMarkdown(md).single() as MdBlock.Table)
+        assertTrue(csv.startsWith("﻿"))
+        assertEquals("Ürün,Fiyat\r\n\"Elma, kırmızı\",\"12,5\"\r\nArmut,\"\"\"4\"\"\"", csv.removePrefix("﻿"))
+    }
+}

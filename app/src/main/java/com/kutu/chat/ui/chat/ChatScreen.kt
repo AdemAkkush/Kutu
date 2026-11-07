@@ -90,7 +90,11 @@ import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kutu.chat.data.db.MessageEntity
 import com.kutu.chat.data.db.ROLE_USER
+import com.kutu.chat.domain.ATT_IMAGE
+import com.kutu.chat.domain.Cap
+import com.kutu.chat.domain.Capabilities
 import com.kutu.chat.domain.EngineEvent
+import com.kutu.chat.domain.ModelMeta
 import com.kutu.chat.domain.Generation
 import com.kutu.chat.domain.PersonaDef
 import com.kutu.chat.ui.ChatViewModel
@@ -131,6 +135,17 @@ fun ChatScreen(
     val pendingPersona by vm.pendingPersona.collectAsStateWithLifecycle()
     val speaking by vm.speaking.collectAsStateWithLifecycle()
     val speakerError by vm.speakerError.collectAsStateWithLifecycle()
+    val speakerPreparing by vm.speakerPreparing.collectAsStateWithLifecycle()
+
+    val describe: (String) -> ModelMeta = remember(modelsState.catalog, settings.visionConfirmed, settings.visionRejected) {
+        { id -> Capabilities.describe(id, modelsState.catalog, settings.visionConfirmed, settings.visionRejected) }
+    }
+    // Resim eklenmişken seçili model görsel anlamıyorsa, en iyi görsel modeli öner.
+    val hasPendingImage = vm.pending.any { it.type == ATT_IMAGE }
+    val visionSuggestion = remember(hasPendingImage, activeModel, modelsState.models, modelsState.catalog, settings.unavailableModels, settings.visionConfirmed, settings.visionRejected) {
+        if (!hasPendingImage || describe(activeModel).has(Cap.VISION)) null
+        else Capabilities.best(Cap.VISION, modelsState.models.map(describe), settings.unavailableModels)
+    }
 
     var showModelPicker by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
@@ -147,7 +162,7 @@ fun ChatScreen(
         uris.forEach(vm::addImage)
     }
     val pickFiles = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
-        uris.forEach(vm::addTextFile)
+        uris.forEach(vm::addDocument)
     }
     var cameraFile by remember { mutableStateOf<File?>(null) }
     val takePhoto = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
@@ -312,6 +327,7 @@ fun ChatScreen(
                         generation = generation,
                         isGenerating = isGenerating,
                         speaking = speaking,
+                        preparingSpeech = speakerPreparing,
                         matches = matches.toSet(),
                         focusId = focusId,
                         vm = vm,
@@ -326,6 +342,9 @@ fun ChatScreen(
                 vm = vm,
                 templates = templates.map { it.title to it.text },
                 generating = isGenerating,
+                activeModelName = activeModel.substringAfter('/'),
+                visionSuggestion = visionSuggestion,
+                onSwitchModel = { vm.selectModel(it) },
                 onGallery = { pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                 onCamera = ::launchCamera,
                 onFile = { pickFiles.launch(arrayOf("*/*")) },
@@ -340,6 +359,7 @@ fun ChatScreen(
             state = modelsState,
             favorites = settings.favoriteModels,
             unavailable = settings.unavailableModels,
+            describe = describe,
             onSelect = { vm.selectModel(it); showModelPicker = false },
             onToggleFavorite = vm::toggleFavorite,
             onRefresh = vm::refreshModels,
@@ -431,6 +451,7 @@ private fun MessageList(
     generation: Generation?,
     isGenerating: Boolean,
     speaking: Long?,
+    preparingSpeech: Boolean,
     matches: Set<Long>,
     focusId: Long?,
     vm: ChatViewModel,
@@ -483,6 +504,7 @@ private fun MessageList(
                             generation = generation,
                             isLast = isLast && !isGenerating,
                             speaking = speaking == m.id,
+                            preparingSpeech = preparingSpeech,
                             canEdit = !isGenerating,
                             onRegenerate = vm::regenerate,
                             onShare = onShare,
@@ -573,6 +595,9 @@ private fun InputBar(
     vm: ChatViewModel,
     templates: List<Pair<String, String>>,
     generating: Boolean,
+    activeModelName: String,
+    visionSuggestion: ModelMeta?,
+    onSwitchModel: (String) -> Unit,
     onGallery: () -> Unit,
     onCamera: () -> Unit,
     onFile: () -> Unit,
@@ -586,6 +611,20 @@ private fun InputBar(
         Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             vm.attachError?.let {
                 Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            }
+            if (visionSuggestion != null) {
+                Surface(color = MaterialTheme.colorScheme.tertiaryContainer, shape = RoundedCornerShape(12.dp)) {
+                    Row(modifier = Modifier.padding(start = 12.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "👁 $activeModelName görselleri anlamayabilir.",
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.weight(1f),
+                        )
+                        androidx.compose.material3.TextButton(onClick = { onSwitchModel(visionSuggestion.id) }) {
+                            Text(visionSuggestion.display + " ile dene")
+                        }
+                    }
+                }
             }
             if (vm.pending.isNotEmpty() || vm.attaching) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -601,7 +640,7 @@ private fun InputBar(
                             onClick = { attachMenu = false; onGallery() })
                         DropdownMenuItem(text = { Text("Fotoğraf çek") }, leadingIcon = { Icon(Icons.Default.PhotoCamera, null) },
                             onClick = { attachMenu = false; onCamera() })
-                        DropdownMenuItem(text = { Text("Metin / kod dosyası") }, leadingIcon = { Icon(Icons.Default.Description, null) },
+                        DropdownMenuItem(text = { Text("Belge (PDF, Excel, Word, metin…)") }, leadingIcon = { Icon(Icons.Default.Description, null) },
                             onClick = { attachMenu = false; onFile() })
                     }
                 }

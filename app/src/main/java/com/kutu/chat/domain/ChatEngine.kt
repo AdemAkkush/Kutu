@@ -284,6 +284,10 @@ class ChatEngine(
             failure = e.message ?: "Bilinmeyen hata"
             markUnavailableIfGone(e, chat.model)
             if (hadImages && e.code in IMAGE_REJECT_CODES) {
+                val text = e.message.orEmpty().lowercase()
+                if ("multimodal" in text || "image" in text || "vision" in text) {
+                    settingsStore.update { it.copy(visionRejected = it.visionRejected + chat.model, visionConfirmed = it.visionConfirmed - chat.model) }
+                }
                 failure += "\n\nBu model görselleri desteklemiyor olabilir. Görsel destekli bir model seçin " +
                     "(örn. gemma-4-31b-it) ya da görseli kaldırıp tekrar deneyin."
             }
@@ -306,6 +310,9 @@ class ChatEngine(
         finish(chatId, current, finalText, reasoning.toString(), failure)
         _generations.update { it - chatId }
 
+        if (failure == null && hadImages && chat.model !in settings.visionConfirmed) {
+            settingsStore.update { it.copy(visionConfirmed = it.visionConfirmed + chat.model, visionRejected = it.visionRejected - chat.model) }
+        }
         if (failure == null) {
             scope.launch { postProcess(chatId) }
         }

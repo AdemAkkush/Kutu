@@ -4,6 +4,8 @@ import android.content.Context
 import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import com.kutu.chat.domain.TtsEngine
+import com.kutu.chat.domain.TtsModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -41,7 +43,15 @@ data class AppSettings(
     val favoriteModels: Set<String> = emptySet(),
     /** 404/410 dönen (kaldırılmış ya da hesaba kapalı) modeller. Seçicide en sona atılır. */
     val unavailableModels: Set<String> = emptySet(),
+    /** Resimli istek başarıyla yanıtlanan / reddedilen modeller (uygulamanın öğrendiği görsel desteği). */
+    val visionConfirmed: Set<String> = emptySet(),
+    val visionRejected: Set<String> = emptySet(),
     val lastChatId: Long = 0,
+    /** Yanıtları sesli okuma: cihazın kendi sesi ya da NVIDIA yapay zekâ sesi. */
+    val ttsEngine: TtsEngine = TtsEngine.NVIDIA,
+    val ttsModel: TtsModel = TtsModel.AUTO,
+    /** Magpie için tercih edilen konuşmacı (örn. Aria). */
+    val ttsVoice: String = "Aria",
 )
 
 /**
@@ -66,6 +76,18 @@ class SettingsStore(private val context: Context) {
     fun cachedModels(): List<String> =
         prefs.getString(KEY_MODELS, "").orEmpty().split('\n').filter { it.isNotBlank() }
 
+    fun ttsFunctionId(model: String): String? = prefs.getString("ttsFn.$model", null)
+
+    fun saveTtsFunctionId(model: String, id: String) {
+        prefs.edit().putString("ttsFn.$model", id).apply()
+    }
+
+    fun cachedCatalog(): String = prefs.getString(KEY_CATALOG, "").orEmpty()
+
+    fun saveCatalog(json: String) {
+        prefs.edit().putString(KEY_CATALOG, json).apply()
+    }
+
     fun saveModels(models: List<String>) {
         prefs.edit().putString(KEY_MODELS, models.joinToString("\n")).apply()
     }
@@ -86,7 +108,12 @@ class SettingsStore(private val context: Context) {
             theme = runCatching { ThemeMode.valueOf(prefs.getString("theme", "") ?: "") }.getOrDefault(d.theme),
             favoriteModels = prefs.getStringSet("favoriteModels", emptySet())?.toSet() ?: emptySet(),
             unavailableModels = prefs.getStringSet("unavailableModels", emptySet())?.toSet() ?: emptySet(),
+            visionConfirmed = prefs.getStringSet("visionConfirmed", emptySet())?.toSet() ?: emptySet(),
+            visionRejected = prefs.getStringSet("visionRejected", emptySet())?.toSet() ?: emptySet(),
             lastChatId = prefs.getLong("lastChatId", 0),
+            ttsEngine = runCatching { TtsEngine.valueOf(prefs.getString("ttsEngine", "") ?: "") }.getOrDefault(d.ttsEngine),
+            ttsModel = runCatching { TtsModel.valueOf(prefs.getString("ttsModel", "") ?: "") }.getOrDefault(d.ttsModel),
+            ttsVoice = prefs.getString("ttsVoice", d.ttsVoice) ?: d.ttsVoice,
         )
     }
 
@@ -105,7 +132,12 @@ class SettingsStore(private val context: Context) {
             .putString("theme", s.theme.name)
             .putStringSet("favoriteModels", s.favoriteModels)
             .putStringSet("unavailableModels", s.unavailableModels)
+            .putStringSet("visionConfirmed", s.visionConfirmed)
+            .putStringSet("visionRejected", s.visionRejected)
             .putLong("lastChatId", s.lastChatId)
+            .putString("ttsEngine", s.ttsEngine.name)
+            .putString("ttsModel", s.ttsModel.name)
+            .putString("ttsVoice", s.ttsVoice)
             .apply()
     }
 
@@ -117,6 +149,7 @@ class SettingsStore(private val context: Context) {
 
     private companion object {
         const val KEY_MODELS = "cachedModels"
+        const val KEY_CATALOG = "cachedCatalog"
 
         fun createSecurePrefs(context: Context): SharedPreferences? {
             fun build() = EncryptedSharedPreferences.create(

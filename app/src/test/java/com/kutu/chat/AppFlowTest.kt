@@ -110,7 +110,7 @@ class AppFlowTest {
         compose.onNodeWithContentDescription("Ek ekle").performClick()
         compose.onNodeWithText("Galeriden resim").assertIsDisplayed()
         compose.onNodeWithText("Fotoğraf çek").assertIsDisplayed()
-        compose.onNodeWithText("Metin / kod dosyası").assertIsDisplayed()
+        compose.onNodeWithText("Belge (PDF, Excel, Word, metin…)").assertIsDisplayed()
         compose.onNodeWithContentDescription("Sesle yaz").assertIsDisplayed()
     }
 

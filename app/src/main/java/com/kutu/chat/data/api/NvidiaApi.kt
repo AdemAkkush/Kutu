@@ -1,6 +1,7 @@
 package com.kutu.chat.data.api
 
 import com.kutu.chat.data.AppSettings
+import com.kutu.chat.domain.CatalogEntry
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.channels.Channel
@@ -17,6 +18,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import okhttp3.Call
 import okhttp3.Callback
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -84,6 +86,18 @@ class NvidiaApi(
         return parsed.data.map { it.id }.distinct().sorted()
     }
 
+    /**
+     * build.nvidia.com'un herkese açık kataloğu: model başına yetenek etiketleri, popülerlik ve kaldırılma tarihi.
+     * Kimlik doğrulama gerekmez. Başarısız olursa çağıran yer sessizce yoklama tabanlı bilgiye düşer.
+     */
+    suspend fun fetchCatalog(): List<CatalogEntry> {
+        val url = CATALOG_URL.toHttpUrl().newBuilder()
+            .addQueryParameter("q", """{"query":"","page":0,"pageSize":300}""")
+            .build()
+        val text = client.newCall(Request.Builder().url(url).get().build()).await()
+        return parseCatalog(text)
+    }
+
     private fun baseUrl(settings: AppSettings) = settings.baseUrl.trim().trimEnd('/')
 
     private fun authorized(builder: Request.Builder, settings: AppSettings): Request.Builder {
@@ -136,6 +150,43 @@ class NvidiaApi(
             .writeTimeout(60, TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
             .build()
+
+        const val CATALOG_URL = "https://api.ngc.nvidia.com/v2/search/catalog/resources/ENDPOINT"
+
+        /** Katalog yanıtından ("ENDPOINT" grubu) model kayıtlarını çıkarır. */
+        fun parseCatalog(raw: String): List<CatalogEntry> {
+            val root = runCatching { JSON.parseToJsonElement(raw) }.getOrNull() as? JsonObject ?: return emptyList()
+            val groups = root["results"] as? kotlinx.serialization.json.JsonArray ?: return emptyList()
+            val resources = groups.mapNotNull { it as? JsonObject }
+                .firstOrNull { (it["groupValue"] as? JsonPrimitive)?.contentOrNull == "ENDPOINT" }
+                ?.get("resources") as? kotlinx.serialization.json.JsonArray ?: return emptyList()
+            fun str(e: JsonElement?) = (e as? JsonPrimitive)?.contentOrNull.orEmpty()
+            return resources.mapNotNull { el ->
+                val r = el as? JsonObject ?: return@mapNotNull null
+                val name = str(r["name"])
+                if (name.isBlank()) return@mapNotNull null
+                val labels = ArrayList<String>()
+                var publisher = ""
+                (r["labels"] as? kotlinx.serialization.json.JsonArray)?.forEach { l ->
+                    val o = l as? JsonObject ?: return@forEach
+                    val values = (o["values"] as? kotlinx.serialization.json.JsonArray)?.map { str(it) }.orEmpty()
+                    if (str(o["key"]) == "publisher") publisher = values.firstOrNull().orEmpty() else labels += values
+                }
+                val attrs = (r["attributes"] as? kotlinx.serialization.json.JsonArray)?.mapNotNull { it as? JsonObject }
+                    ?.associate { str(it["key"]) to str(it["value"]) }.orEmpty()
+                val deprecation = attrs["DEPRECATION"]?.let { parseUsDate(it) }.orEmpty()
+                val popularity = maxOf(
+                    attrs["lastMonthApiInvocationCount"]?.toLongOrNull() ?: 0,
+                    attrs["last_month_api_invocation_count"]?.toLongOrNull() ?: 0,
+                )
+                CatalogEntry(name.lowercase(), str(r["displayName"]).ifBlank { name }, publisher, labels, deprecation, popularity)
+            }
+        }
+
+        /** "11/15/2026" → "2026-11-15"; çözülemezse boş. */
+        fun parseUsDate(s: String): String = runCatching {
+            java.time.LocalDate.parse(s.trim(), java.time.format.DateTimeFormatter.ofPattern("M/d/yyyy")).toString()
+        }.getOrDefault("")
 
         /** Tek bir SSE satırını çözer. İlgisiz satırlar için null döner. */
         fun parseSseLine(line: String): StreamEvent? {

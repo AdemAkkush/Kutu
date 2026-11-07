@@ -122,6 +122,7 @@ fun AssistantMessage(
     generation: Generation?,
     isLast: Boolean,
     speaking: Boolean,
+    preparingSpeech: Boolean,
     canEdit: Boolean,
     onRegenerate: () -> Unit,
     onShare: (String) -> Unit,
@@ -187,11 +188,15 @@ fun AssistantMessage(
                     Icon(Icons.Default.ContentCopy, contentDescription = "Kopyala", modifier = Modifier.size(18.dp))
                 }
                 IconButton(onClick = { onSpeak(split.answer) }) {
-                    Icon(
-                        if (speaking) Icons.Default.Stop else Icons.AutoMirrored.Filled.VolumeUp,
-                        contentDescription = if (speaking) "Okumayı durdur" else "Sesli oku",
-                        modifier = Modifier.size(18.dp),
-                    )
+                    if (speaking && preparingSpeech) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    } else {
+                        Icon(
+                            if (speaking) Icons.Default.Stop else Icons.AutoMirrored.Filled.VolumeUp,
+                            contentDescription = if (speaking) "Okumayı durdur" else "Sesli oku",
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
                 }
                 if (isLast) {
                     IconButton(onClick = onRegenerate) {

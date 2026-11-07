@@ -9,3 +9,8 @@
 -dontwarn com.google.errorprone.annotations.CheckReturnValue
 -dontwarn com.google.errorprone.annotations.Immutable
 -dontwarn com.google.errorprone.annotations.RestrictedApi
+
+# PDFBox (PDF metin çıkarma): yansıma ile yüklenen yazı tipi/filtre sınıfları korunur; isteğe bağlı JPEG2000 çözücü yok.
+-keep class com.tom_roush.** { *; }
+-dontwarn com.gemalto.jp2.**
+-dontwarn com.tom_roush.pdfbox.**

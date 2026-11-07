@@ -4,6 +4,7 @@ import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -50,6 +51,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kutu.chat.data.DEFAULT_BASE_URL
 import com.kutu.chat.data.DEFAULT_SYSTEM_PROMPT
 import com.kutu.chat.data.ThemeMode
+import com.kutu.chat.domain.Capabilities
+import com.kutu.chat.domain.MAGPIE_SPEAKERS
+import com.kutu.chat.domain.TtsEngine
+import com.kutu.chat.domain.TtsModel
 import com.kutu.chat.ui.SettingsViewModel
 import com.kutu.chat.ui.components.ModelPickerSheet
 import kotlin.math.roundToInt
@@ -174,6 +179,70 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit, onOpenMemory: () -
             TextButton(onClick = { vm.update { it.copy(systemPrompt = DEFAULT_SYSTEM_PROMPT) } }) { Text("Varsayılana döndür") }
 
             HorizontalDivider()
+            Section("Seslendirme")
+            Text(
+                "Yanıtların altındaki hoparlör düğmesi yanıtı sesli okur. NVIDIA'nın yapay zekâ sesleri (Chatterbox, Magpie) " +
+                    "cihaz sesinden çok daha doğaldır; Türkçe için Chatterbox kullanılır. Hata olursa cihaz sesine geçilir.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                val engines = listOf(TtsEngine.NVIDIA to "NVIDIA yapay zekâ", TtsEngine.DEVICE to "Cihaz sesi")
+                engines.forEachIndexed { index, (engine, label) ->
+                    SegmentedButton(
+                        selected = settings.ttsEngine == engine,
+                        onClick = { vm.update { it.copy(ttsEngine = engine) } },
+                        shape = SegmentedButtonDefaults.itemShape(index, engines.size),
+                    ) { Text(label) }
+                }
+            }
+            if (settings.ttsEngine == TtsEngine.NVIDIA) {
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                    val models = TtsModel.entries
+                    models.forEachIndexed { index, model ->
+                        SegmentedButton(
+                            selected = settings.ttsModel == model,
+                            onClick = { vm.update { it.copy(ttsModel = model) } },
+                            shape = SegmentedButtonDefaults.itemShape(index, models.size),
+                        ) { Text(model.label) }
+                    }
+                }
+                Text(
+                    when (settings.ttsModel) {
+                        TtsModel.AUTO -> "Otomatik: Türkçe ve Magpie'nin bilmediği diller Chatterbox ile, İngilizce vb. Magpie ile okunur."
+                        TtsModel.CHATTERBOX -> "Chatterbox: Türkçe dahil 23 dil, tek erkek ses."
+                        TtsModel.MAGPIE -> "Magpie: İngilizce, İspanyolca, Fransızca, Almanca, Çince, İtalyanca, Japonca, Korece, Arapça, Hintçe, Portekizce, Vietnamca. Türkçe yok; Türkçe metin Chatterbox'a yönlendirilir."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (settings.ttsModel != TtsModel.CHATTERBOX) {
+                    Text("Magpie konuşmacısı", style = MaterialTheme.typography.labelLarge)
+                    Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        MAGPIE_SPEAKERS.forEach { name ->
+                            androidx.compose.material3.FilterChip(
+                                selected = settings.ttsVoice == name,
+                                onClick = { vm.update { it.copy(ttsVoice = name) } },
+                                label = { Text(name) },
+                            )
+                        }
+                    }
+                }
+            }
+            val speaking by vm.speaking.collectAsStateWithLifecycle()
+            val preparing by vm.speakerPreparing.collectAsStateWithLifecycle()
+            val speakerError by vm.speakerError.collectAsStateWithLifecycle()
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Button(
+                    enabled = settings.ttsEngine == TtsEngine.DEVICE || settings.apiKey.isNotBlank(),
+                    onClick = { vm.speakSample("Merhaba, ben Kutu. Yapay zekâ sesimi beğendin mi? This is how I sound in English.") },
+                ) {
+                    Text(if (speaking == -1L) (if (preparing) "Hazırlanıyor…" else "Durdur") else "Sesi dene")
+                }
+            }
+            speakerError?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+
+            HorizontalDivider()
             Section("Yedekleme")
             Text(
                 "Tüm sohbetleri, eklerini, hafızayı, kişilikleri ve şablonları tek bir ZIP dosyasına aktarın; " +
@@ -220,6 +289,7 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit, onOpenMemory: () -
             state = modelsState,
             favorites = settings.favoriteModels,
             unavailable = settings.unavailableModels,
+            describe = { id -> Capabilities.describe(id, modelsState.catalog, settings.visionConfirmed, settings.visionRejected) },
             onSelect = { id ->
                 vm.update { if (target == PickerTarget.DEFAULT) it.copy(defaultModel = id) else it.copy(memoryModel = id) }
                 picker = null

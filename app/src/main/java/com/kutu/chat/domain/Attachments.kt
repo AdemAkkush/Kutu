@@ -15,6 +15,8 @@ data class Attachment(
     val file: String,
     val mime: String = "",
     val size: Long = 0,
+    /** Kullanıcıya gösterilen kısa bilgi, örn. "24 sayfa · 51 bin karakter". */
+    val note: String = "",
 )
 
 object Attachments {

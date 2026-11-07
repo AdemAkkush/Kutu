@@ -97,7 +97,12 @@ fun AttachmentThumb(a: Attachment, size: Dp = 64.dp, onRemove: (() -> Unit)? = n
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     Icon(Icons.Default.Description, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Text(a.name, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    androidx.compose.foundation.layout.Column {
+                        Text(a.name, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        if (a.note.isNotBlank()) {
+                            Text(a.note, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
                 }
             }
         }

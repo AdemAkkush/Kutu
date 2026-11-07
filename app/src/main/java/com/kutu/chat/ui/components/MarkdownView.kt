@@ -39,6 +39,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.kutu.chat.data.DocumentExtractor
 
 @Composable
 fun MarkdownView(
@@ -161,10 +162,34 @@ fun CodeBlock(lang: String, code: String, modifier: Modifier = Modifier) {
     }
 }
 
+/** Tabloyu Excel'in doğru okuyacağı CSV'ye çevirir (UTF-8 BOM'lu, Türkçe karakterler bozulmaz). */
+fun tableToCsv(table: MdBlock.Table): String {
+    fun cell(s: String) = DocumentExtractor.csv(s.replace(Regex("[*_`]+"), "").trim())
+    val cols = maxOf(table.header.size, table.rows.maxOfOrNull { it.size } ?: 0)
+    fun row(r: List<String>) = (0 until cols).joinToString(",") { cell(r.getOrElse(it) { "" }) }
+    return "\uFEFF" + (listOf(row(table.header)) + table.rows.map(::row)).joinToString("\r\n")
+}
+
+private fun shareCsv(context: android.content.Context, table: MdBlock.Table) {
+    val dir = java.io.File(context.cacheDir, "exports").apply { mkdirs() }
+    dir.listFiles()?.filter { System.currentTimeMillis() - it.lastModified() > 24 * 3600 * 1000L }?.forEach { it.delete() }
+    val file = java.io.File(dir, "tablo-" + java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date()) + ".csv")
+    file.writeText(tableToCsv(table))
+    val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+    val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+        type = "text/csv"
+        putExtra(android.content.Intent.EXTRA_STREAM, uri)
+        addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    context.startActivity(android.content.Intent.createChooser(intent, "Tabloyu paylaş (CSV / Excel)"))
+}
+
 @Composable
 private fun TableBlock(table: MdBlock.Table, styles: InlineStyles, color: Color) {
     val border = MaterialTheme.colorScheme.outlineVariant
     val cols = maxOf(table.header.size, table.rows.maxOfOrNull { it.size } ?: 0)
+    val context = androidx.compose.ui.platform.LocalContext.current
+    Column {
     Column(
         modifier = Modifier
             .horizontalScroll(rememberScrollState())
@@ -192,5 +217,9 @@ private fun TableBlock(table: MdBlock.Table, styles: InlineStyles, color: Color)
                 for (c in 0 until cols) cell(row.getOrElse(c) { "" }, false, null)()
             }
         }
+    }
+    androidx.compose.material3.TextButton(onClick = { shareCsv(context, table) }) {
+        Text("CSV / Excel olarak paylaş", style = MaterialTheme.typography.labelMedium)
+    }
     }
 }

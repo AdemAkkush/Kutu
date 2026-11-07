@@ -35,6 +35,7 @@ object TokenEstimator {
 object ContextBuilder {
     private const val MAX_MEMORY_CHARS = 4000
     private const val IMAGE_WINDOW = 4
+    private const val DOC_SHARE = 0.6
 
     fun build(
         settings: AppSettings,
@@ -45,7 +46,9 @@ object ContextBuilder {
         source: AttachmentSource? = null,
     ): List<ChatMessageDto> {
         val system = buildSystemPrompt(settings, chat, memories, now)
-        val usable = usableMessages(chat, history, source)
+        // Belgeler bağlamın en fazla %60'ını doldurur; fazlası için soruyla ilgili bölümler seçilir.
+        val docChars = (settings.contextTokens * 3 * DOC_SHARE).toInt()
+        val usable = usableMessages(chat, history, source, docChars)
         val budget = (settings.contextTokens - TokenEstimator.estimate(system)).coerceAtLeast(1000)
         val trimmed = trimToBudget(usable, budget)
         return buildList {
@@ -90,6 +93,8 @@ object ContextBuilder {
         chat: ChatEntity,
         history: List<MessageEntity>,
         source: AttachmentSource? = null,
+        /** Tüm metin ekleri için toplam karakter bütçesi. */
+        docChars: Int = 200_000,
     ): List<ChatMessageDto> {
         val kept = history.filter {
             it.id > chat.summarizedUpTo &&
@@ -98,6 +103,9 @@ object ContextBuilder {
         }
         // Resimler yalnızca son birkaç mesajda gerçekten gönderilir; eskileri yer tutucuya indirilir.
         val imageFrom = kept.size - IMAGE_WINDOW
+        val textDocs = kept.sumOf { m -> if (m.attachments.isBlank()) 0 else Attachments.parse(m.attachments).count { it.type == ATT_TEXT } }
+        val perDoc = if (textDocs == 0) docChars else (docChars / textDocs).coerceAtLeast(6_000)
+        val query = kept.lastOrNull { it.role == ROLE_USER }?.content.orEmpty()
         val out = ArrayList<ChatMessageDto>()
         kept.forEachIndexed { index, m ->
             var text = if (m.role == ROLE_ASSISTANT) stripThinking(m.content) else m.content.trim()
@@ -107,8 +115,11 @@ object ContextBuilder {
                 for (a in Attachments.parse(m.attachments)) {
                     if (a.type == ATT_TEXT) {
                         val body = source?.text(a)
-                        if (body != null) extra.append("\n\n[Ek dosya: ${a.name}]\n```\n$body\n```")
-                        else extra.append("\n\n[Ek dosya: ${a.name} – okunamadı]")
+                        if (body != null) {
+                            val ex = DocExcerpt.select(body, query, perDoc)
+                            val note = if (ex.trimmed) " – uzun belge: sorunuzla ilgili bölümler gösteriliyor (${ex.shownChars}/${ex.totalChars} karakter)" else ""
+                            extra.append("\n\n[Ek dosya: ${a.name}$note]\n```\n${ex.text}\n```")
+                        } else extra.append("\n\n[Ek dosya: ${a.name} – okunamadı]")
                     } else {
                         val url = if (index >= imageFrom) source?.imageDataUrl(a) else null
                         if (url != null) images.add(url) else extra.append("\n[Görsel: ${a.name}]")

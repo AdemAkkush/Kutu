@@ -107,7 +107,7 @@ class FeaturesTest {
     }
 
     @Test fun longTextFileIsTruncated() = runBlocking {
-        val big = "satır\n".repeat(60_000).toByteArray()
+        val big = "satır\n".repeat(220_000).toByteArray()
         val a = store.importText(Uri.fromFile(tempFile("buyuk.txt", big)))
         val text = store.text(a)!!
         assertTrue(text.length < big.size)
