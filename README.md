@@ -29,6 +29,8 @@ Kotlin + Jetpack Compose (Material 3) ile yazıldı; `https://integrate.api.nvid
 
 **Yapay zekâ ile seslendirme**
 - Yanıtın altındaki hoparlör düğmesi, NVIDIA'nın **Chatterbox** (Türkçe dahil 23 dil) ve **Magpie** (12 dil, 10 konuşmacı) modelleriyle okur; parça parça sentezlenir, ilk parça çalarken sonrası üretilir
+- **Metin uzunluğu:** Chatterbox sunucuda tek istekte en fazla 500 karakter kabul eder (ölçüldü; Türkçe konuşan başka NVIDIA modeli yok). Uygulama uzun metni cümle sınırlarında 470 karakterlik parçalara böler, bu yüzden okunabilecek uzunluk sınırsızdır. Magpie'de pratikte sınır yoktur (6000 karakter denendi), 2500 karakterlik parçalar kullanılır
+- **Akışlı sentez:** ses üretildikçe çalınır; ilk ses ~0,5 saniyede başlar, sonraki parçalar önceden üretilir
 - Dil metinden otomatik algılanır; Türkçe → Chatterbox, İngilizce vb. → Magpie. Hata olursa otomatik cihaz sesine geçer. Ayarlar'dan motor, model ve konuşmacı seçilir, "Sesi dene" düğmesi vardır
 - Sesler, NVIDIA'nın Riva gRPC servisinden (`grpc.nvcf.nvidia.com`) gelir; bu sade istemci OkHttp üzerinde, ağır gRPC kütüphaneleri olmadan yazıldı
 
@@ -45,7 +47,7 @@ Kotlin + Jetpack Compose (Material 3) ile yazıldı; `https://integrate.api.nvid
 **Model seçimi — yeteneğe göre gruplama**
 - API'den canlı model listesi (`/v1/models`) + NVIDIA'nın herkese açık kataloğu (build.nvidia.com) birleştirilir
 - Filtre çipleri: ⭐ Favoriler, 👁 Görsel, 🧠 Düşünen, 💻 Kod, 🌍 Çeviri, 📄 Belge, ⚡ Hızlı, 🛠 Ajan; her modelde rozetler görünür, popüler olanlar üstte sıralanır
-- **Çalışmayan modeller ayıklanır:** `/v1/models` listesindeki modellerin yaklaşık yarısı gerçekte kaldırılmış durumda (404/410). Katalogda olmayanlar varsayılan olarak gizlenir (gerçek hesapta 14/14 çalışan model katalogda, 42/42 kaldırılmış model katalogda yok); kaldırılma tarihi yaklaşanlar uyarıyla gösterilir
+- **Çalışmayan modeller ayıklanır:** `/v1/models` listesindeki modellerin yaklaşık yarısı gerçekte kaldırılmış durumda (404/410). Katalogda olmayan, hata veren (404/410) ve kaldırılma tarihi geçmiş modeller seçicide **hiç gösterilmez** (gerçek hesapta 14/14 çalışan model katalogda, 42/42 kaldırılmış model katalogda yok); kaldırılma tarihi yaklaşanlar uyarıyla görünür. Seçili model çalışmıyorsa listenin başında uyarıyla gösterilir. Hata yüzünden gizlenenler Ayarlar'dan sıfırlanabilir
 - Resim eklenmişken seçili model görsel anlamıyorsa, en iyi görsel model önerilir; uygulama hangi modelin resim kabul ettiğini kullandıkça kendisi öğrenir
 - Listede olmayan bir modeli kimliğini yazarak doğrudan kullanabilirsiniz
 

@@ -5,6 +5,11 @@ import java.io.IOException
 import java.net.URLDecoder
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.buffer
+import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
@@ -53,16 +58,14 @@ class RivaTts(
         voiceName: String,
         sampleRate: Int,
     ): ByteArray {
-        val request = Proto.string(1, text) + Proto.string(2, languageCode) + Proto.varint(3, ENCODING_LINEAR_PCM) +
-            Proto.varint(4, sampleRate.toLong()) + Proto.string(5, voiceName)
-        val reply = unary("/nvidia.riva.tts.RivaSpeechSynthesis/Synthesize", apiKey, functionId, request)
+        val reply = unary(synthesizeRequest(text, languageCode, voiceName, sampleRate, apiKey, functionId, "/nvidia.riva.tts.RivaSpeechSynthesis/Synthesize"))
         val audio = Proto.fields(reply).firstOrNull { it.number == 1 && it.bytes != null }?.bytes
         if (audio == null || audio.isEmpty()) throw RivaException("Sunucu ses döndürmedi.")
         return audio
     }
 
     suspend fun voices(apiKey: String, functionId: String): RivaVoices {
-        val reply = unary("/nvidia.riva.tts.RivaSpeechSynthesis/GetRivaSynthesisConfig", apiKey, functionId, ByteArray(0))
+        val reply = unary(grpcRequest("/nvidia.riva.tts.RivaSpeechSynthesis/GetRivaSynthesisConfig", apiKey, functionId, ByteArray(0)))
         return parseConfig(reply)
     }
 
@@ -91,25 +94,19 @@ class RivaTts(
             ?.get("id")?.jsonPrimitive?.contentOrNull
     }
 
-    private suspend fun unary(path: String, apiKey: String, functionId: String, message: ByteArray): ByteArray {
-        if (apiKey.isBlank()) throw RivaException("API anahtarı girilmemiş.")
-        val framed = ByteArray(5 + message.size)
-        framed[1] = (message.size ushr 24).toByte(); framed[2] = (message.size ushr 16).toByte()
-        framed[3] = (message.size ushr 8).toByte(); framed[4] = message.size.toByte()
-        message.copyInto(framed, 5)
-        val request = Request.Builder()
-            .url(host + path)
-            .header("te", "trailers")
-            .header("grpc-accept-encoding", "identity")
-            .header("accept-encoding", "identity")
-            .header("user-agent", "kutu-grpc/1.0")
-            .header("function-id", functionId)
-            .header("authorization", "Bearer $apiKey")
-            .post(framed.toRequestBody(GRPC))
-            .build()
+    private suspend fun unary(request: Request): ByteArray {
         val (body, status, grpcMessage, http) = client.newCall(request).awaitGrpc()
+        failure(http, status, grpcMessage)?.let { throw it }
+        return unframe(body)
+    }
+
+    /**
+     * Sunucu yanıtını Türkçe bir hataya çevirir; başarılıysa null.
+     * Ağ geçidi hataları HTTP koduyla, gRPC hataları `grpc-status` ile gelir.
+     */
+    private fun failure(http: Int, status: Int, grpcMessage: String): RivaException? {
         if (http != 200) {
-            throw RivaException(
+            return RivaException(
                 when (http) {
                     401, 403 -> "Yetkilendirme hatası ($http): API anahtarınız bu ses modeline erişemiyor."
                     404 -> "Ses modeli bulunamadı (404)."
@@ -119,20 +116,94 @@ class RivaTts(
                 http = http,
             )
         }
-        if (status != 0) {
-            throw RivaException(
-                when (status) {
-                    16 -> "Yetkilendirme hatası: API anahtarı geçersiz."
-                    8 -> "Ses isteği sınırı aşıldı, biraz bekleyin."
-                    14 -> "Ses sunucusuna ulaşılamadı."
-                    3 -> "Ses isteği reddedildi: $grpcMessage"
-                    else -> "Ses sunucusu hatası ($status): $grpcMessage"
-                },
-                grpcStatus = status,
-            )
-        }
-        return unframe(body)
+        if (status == 0) return null
+        val tooLong = grpcMessage.contains("exceeds maximum allowed length")
+        return RivaException(
+            when {
+                tooLong -> "Metin parçası modelin sınırını aşıyor ($grpcMessage)"
+                status == 16 -> "Yetkilendirme hatası: API anahtarı geçersiz."
+                status == 8 -> "Ses isteği sınırı aşıldı, biraz bekleyin."
+                status == 14 -> "Ses sunucusuna ulaşılamadı."
+                status == 3 -> "Ses isteği reddedildi: $grpcMessage"
+                else -> "Ses sunucusu hatası ($status): ${grpcMessage.take(160)}"
+            },
+            grpcStatus = status,
+        )
     }
+
+    private fun synthesizeRequest(text: String, languageCode: String, voiceName: String, sampleRate: Int, apiKey: String, functionId: String, path: String): Request {
+        val message = Proto.string(1, text) + Proto.string(2, languageCode) + Proto.varint(3, ENCODING_LINEAR_PCM) +
+            Proto.varint(4, sampleRate.toLong()) + Proto.string(5, voiceName)
+        return grpcRequest(path, apiKey, functionId, message)
+    }
+
+    private fun grpcRequest(path: String, apiKey: String, functionId: String, message: ByteArray): Request {
+        if (apiKey.isBlank()) throw RivaException("API anahtarı girilmemiş.")
+        val framed = ByteArray(5 + message.size)
+        framed[1] = (message.size ushr 24).toByte(); framed[2] = (message.size ushr 16).toByte()
+        framed[3] = (message.size ushr 8).toByte(); framed[4] = message.size.toByte()
+        message.copyInto(framed, 5)
+        return Request.Builder()
+            .url(host + path)
+            .header("te", "trailers")
+            .header("grpc-accept-encoding", "identity")
+            .header("accept-encoding", "identity")
+            .header("user-agent", "kutu-grpc/1.0")
+            .header("function-id", functionId)
+            .header("authorization", "Bearer $apiKey")
+            .post(framed.toRequestBody(GRPC))
+            .build()
+    }
+
+    /**
+     * Akışlı sentez (`SynthesizeOnline`): ses üretildikçe parça parça gelir, ilk ses ~1 saniyede başlar.
+     * Metin sınırı tek-seferlik çağrıyla aynıdır (Chatterbox için 500 karakter).
+     */
+    fun synthesizeStream(
+        apiKey: String,
+        functionId: String,
+        text: String,
+        languageCode: String,
+        voiceName: String,
+        sampleRate: Int,
+    ): Flow<ByteArray> = callbackFlow {
+        val request = synthesizeRequest(text, languageCode, voiceName, sampleRate, apiKey, functionId, "/nvidia.riva.tts.RivaSpeechSynthesis/SynthesizeOnline")
+        val call = client.newCall(request)
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                close(if (call.isCanceled()) null else RivaException("Bağlantı hatası: ${e.message ?: e.javaClass.simpleName}"))
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                response.use { res ->
+                    try {
+                        if (res.code != 200) { close(failure(res.code, 0, "")); return }
+                        if (res.protocol != Protocol.HTTP_2) { close(RivaException("Ses sunucusu HTTP/2 gerektiriyor (${res.protocol}).")); return }
+                        val source = res.body!!.source()
+                        while (!source.exhausted()) {
+                            val flag = source.readByte().toInt()
+                            val len = source.readInt()
+                            if (flag != 0) throw RivaException("Sunucu sıkıştırılmış yanıt gönderdi (desteklenmiyor).")
+                            if (len < 0 || len > MAX_MESSAGE) throw RivaException("Bozuk gRPC yanıtı.")
+                            val audio = Proto.fields(source.readByteArray(len.toLong())).firstOrNull { it.number == 1 && it.bytes != null }?.bytes
+                            if (audio != null && audio.isNotEmpty()) trySend(audio)
+                        }
+                        val trailers = runCatching { res.trailers() }.getOrNull()
+                        val status = (trailers?.get("grpc-status") ?: res.header("grpc-status"))?.toIntOrNull() ?: 0
+                        val msg = (trailers?.get("grpc-message") ?: res.header("grpc-message")).orEmpty()
+                        close(failure(200, status, runCatching { URLDecoder.decode(msg, "UTF-8") }.getOrDefault(msg)))
+                    } catch (e: RivaException) {
+                        close(e)
+                    } catch (e: IOException) {
+                        close(if (call.isCanceled()) null else RivaException("Ses bağlantısı koptu: ${e.message ?: e.javaClass.simpleName}"))
+                    } catch (e: Exception) {
+                        close(RivaException("Yanıt okunamadı: ${e.message}"))
+                    }
+                }
+            }
+        })
+        awaitClose { call.cancel() }
+    }.buffer(Channel.UNLIMITED)
 
     private data class GrpcResult(val body: ByteArray, val status: Int, val message: String, val http: Int)
 
@@ -171,6 +242,7 @@ class RivaTts(
     companion object {
         private val GRPC = "application/grpc".toMediaType()
         const val ENCODING_LINEAR_PCM = 1L
+        private const val MAX_MESSAGE = 64 * 1024 * 1024
 
         /** gRPC çerçevelerinden (1 bayt bayrak + 4 bayt uzunluk) mesaj yüklerini birleştirir. */
         fun unframe(body: ByteArray): ByteArray {

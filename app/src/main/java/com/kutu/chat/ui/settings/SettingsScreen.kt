@@ -139,6 +139,16 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit, onOpenMemory: () -
             ModelField("Varsayılan sohbet modeli", settings.defaultModel) { picker = PickerTarget.DEFAULT }
             ModelField("Arka plan modeli (başlık, özet, hafıza)", settings.memoryModel) { picker = PickerTarget.BACKGROUND }
             Text(
+                "Çalışmayan modeller (kaldırılmış ya da hata veren) model seçicide gösterilmez.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (settings.unavailableModels.isNotEmpty()) {
+                OutlinedButton(onClick = { vm.update { it.copy(unavailableModels = emptySet()) } }) {
+                    Text("Hata nedeniyle gizlenen ${settings.unavailableModels.size} modeli yeniden göster")
+                }
+            }
+            Text(
                 "Arka plan işleri için küçük ve hızlı bir model seçmek hem hızlı hem ucuzdur.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,

@@ -43,19 +43,29 @@ import com.kutu.chat.data.ModelsState
 import com.kutu.chat.domain.Cap
 import com.kutu.chat.domain.Capabilities
 import com.kutu.chat.domain.ModelMeta
+import java.time.LocalDate
 
 /** Filtre çiplerinde gösterilen yetenekler (sohbet neredeyse hepsinde olduğu için çip yok). */
 private val FILTER_CAPS = listOf(Cap.VISION, Cap.REASONING, Cap.CODE, Cap.TRANSLATE, Cap.DOCUMENT, Cap.FAST, Cap.AGENT)
 
-/** Seçicideki bir satırın sıralama anahtarı: çalışmayanlar sona, sonra favoriler, sonra popülerlik. */
-internal fun pickerOrder(
+/**
+ * Gerçekten kullanılabilecek modeller. Çalışmayanlar seçicide hiç gösterilmez:
+ *  - çağrıldığında 404/410 verenler ([unavailable]),
+ *  - canlı katalogda olmayanlar (kaldırılmış),
+ *  - kaldırılma tarihi geçmiş olanlar.
+ * Katalog hiç alınamadıysa (inCatalog == null) hiçbir model elenmez.
+ */
+internal fun usableModels(
     models: List<ModelMeta>,
-    favorites: Set<String>,
     unavailable: Set<String>,
-): List<ModelMeta> = models.sortedWith(
-    compareBy<ModelMeta> { it.id in unavailable }
-        .thenBy { it.inCatalog == false }
-        .thenByDescending { it.id in favorites }
+    today: LocalDate = LocalDate.now(),
+): List<ModelMeta> = models.filter {
+    it.id !in unavailable && it.inCatalog != false && (it.deprecation == null || it.deprecation.isAfter(today))
+}
+
+/** Seçicideki sıra: favoriler, sonra popülerlik. */
+internal fun pickerOrder(models: List<ModelMeta>, favorites: Set<String>): List<ModelMeta> = models.sortedWith(
+    compareByDescending<ModelMeta> { it.id in favorites }
         .thenByDescending { it.popularity }
         .thenBy { it.id },
 )
@@ -81,18 +91,23 @@ fun ModelPickerSheet(
     var onlyFavorites by remember { mutableStateOf(false) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
-    val metas = remember(state.models, state.catalog, favorites, unavailable, describe) { state.models.map(describe) }
-    val visible = remember(metas, showAll) { metas.filter { showAll || (it.chatCapable && it.inCatalog != false) } }
+    val metas = remember(state.models, state.catalog, describe) { state.models.map(describe) }
+    val usable = remember(metas, unavailable) { usableModels(metas, unavailable) }
+    val visible = remember(usable, showAll) { usable.filter { showAll || it.chatCapable } }
     val counts = remember(visible) { FILTER_CAPS.associateWith { c -> visible.count { c in it.caps } } }
-    val hiddenCount = metas.size - visible.size
+    val hiddenCount = usable.size - visible.size   // gömme / güvenlik gibi sohbet dışı modeller
+    // Seçili model çalışmıyorsa nedenini görebilmek için en üstte uyarıyla gösterilir.
+    val brokenCurrent = remember(usable, current) {
+        if (current.isNotBlank() && usable.none { it.id == current }) describe(current) else null
+    }
 
-    val filtered = remember(visible, query, capFilter, onlyFavorites, favorites, unavailable) {
+    val filtered = remember(visible, query, capFilter, onlyFavorites, favorites) {
         pickerOrder(
             visible
                 .filter { capFilter == null || capFilter in it.caps }
                 .filter { !onlyFavorites || it.id in favorites }
                 .filter { query.isBlank() || it.id.contains(query.trim(), ignoreCase = true) || it.display.contains(query.trim(), ignoreCase = true) },
-            favorites, unavailable,
+            favorites,
         )
     }
     val typed = query.trim()
@@ -141,7 +156,7 @@ fun ModelPickerSheet(
                 FilterChip(
                     selected = showAll,
                     onClick = { showAll = !showAll },
-                    label = { Text(if (hiddenCount > 0) "Tümünü göster (+$hiddenCount)" else "Tümünü göster") },
+                    label = { Text(if (hiddenCount > 0) "Sohbet dışı modelleri göster (+$hiddenCount)" else "Sohbet dışı modelleri göster") },
                 )
                 Text(
                     "${filtered.size} model",
@@ -161,6 +176,16 @@ fun ModelPickerSheet(
                 Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             }
             LazyColumn(modifier = Modifier.weight(1f)) {
+                if (brokenCurrent != null) {
+                    item {
+                        ModelRow(
+                            title = brokenCurrent.display, subtitle = brokenCurrent.id.substringBefore('/', ""), selected = true,
+                            favorite = false, dimmed = false,
+                            warning = "Seçili model artık çalışmıyor; aşağıdan başka bir model seçin.",
+                            badges = "", onClick = {}, onToggleFavorite = null,
+                        )
+                    }
+                }
                 if (canUseTyped) {
                     item {
                         ModelRow(
@@ -181,19 +206,13 @@ fun ModelPickerSheet(
                     }
                 }
                 items(filtered, key = { it.id }) { meta ->
-                    val dead = meta.id in unavailable
-                    val warning = when {
-                        dead -> "Çalışmıyor (404/410): kaldırılmış ya da hesabınıza kapalı"
-                        meta.inCatalog == false -> "Katalogda yok: büyük olasılıkla kaldırılmış"
-                        meta.deprecation != null -> "${Capabilities.formatDate(meta.deprecation)} tarihinde kaldırılacak"
-                        else -> null
-                    }
+                    val warning = meta.deprecation?.let { "${Capabilities.formatDate(it)} tarihinde kaldırılacak" }
                     ModelRow(
                         title = meta.display,
                         subtitle = meta.id.substringBefore('/', ""),
                         selected = meta.id == current,
                         favorite = meta.id in favorites,
-                        dimmed = dead || meta.inCatalog == false,
+                        dimmed = false,
                         warning = warning,
                         badges = meta.caps.filter { it != Cap.CHAT }.joinToString(" ") { it.emoji },
                         onClick = { onSelect(meta.id) },

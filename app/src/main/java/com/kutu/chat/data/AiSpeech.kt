@@ -6,12 +6,18 @@ import com.kutu.chat.data.api.RivaVoices
 import com.kutu.chat.domain.TtsModel
 import com.kutu.chat.domain.TtsPlanner
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 
 /** Riva TTS çağrılarını soyutlar (testlerde sahtesi kullanılır). */
 interface TtsService {
     suspend fun voices(apiKey: String, functionId: String): RivaVoices
     suspend fun synthesize(apiKey: String, functionId: String, text: String, languageCode: String, voiceName: String, sampleRate: Int): ByteArray
     suspend fun findFunctionId(apiKey: String, functionName: String): String?
+
+    /** Ses parça parça gelir. Varsayılan: tek seferlik sentezi tek parça olarak verir. */
+    fun synthesizeStream(apiKey: String, functionId: String, text: String, languageCode: String, voiceName: String, sampleRate: Int): Flow<ByteArray> =
+        flow { emit(synthesize(apiKey, functionId, text, languageCode, voiceName, sampleRate)) }
 }
 
 class RivaTtsService(private val riva: RivaTts = RivaTts()) : TtsService {
@@ -19,6 +25,17 @@ class RivaTtsService(private val riva: RivaTts = RivaTts()) : TtsService {
     override suspend fun synthesize(apiKey: String, functionId: String, text: String, languageCode: String, voiceName: String, sampleRate: Int) =
         riva.synthesize(apiKey, functionId, text, languageCode, voiceName, sampleRate)
     override suspend fun findFunctionId(apiKey: String, functionName: String) = riva.findFunctionId(apiKey, functionName)
+
+    /** Akış desteklenmiyorsa (UNIMPLEMENTED) ilk ses gelmeden tek seferlik senteze düşer. */
+    override fun synthesizeStream(apiKey: String, functionId: String, text: String, languageCode: String, voiceName: String, sampleRate: Int): Flow<ByteArray> = flow {
+        var any = false
+        try {
+            riva.synthesizeStream(apiKey, functionId, text, languageCode, voiceName, sampleRate).collect { any = true; emit(it) }
+        } catch (e: RivaException) {
+            if (any || e.grpcStatus != 12) throw e
+            emit(riva.synthesize(apiKey, functionId, text, languageCode, voiceName, sampleRate))
+        }
+    }
 }
 
 /** Bir metin için seçilmiş model, dil, ses ve örnekleme hızı. */
@@ -28,7 +45,10 @@ data class PreparedSpeech(
     val language: String,
     val voice: String,
     val sampleRate: Int,
-)
+) {
+    /** Bu modelin tek istekte kabul ettiği en fazla karakter. */
+    val maxChars get() = model.maxChars
+}
 
 /** Metin → (model, dil, ses) kararı ve parça parça sentez. Bir model kimliği değişmişse dizinden yeniden çözer. */
 class AiSpeech(
@@ -49,6 +69,21 @@ class AiSpeech(
 
     suspend fun synthesize(p: PreparedSpeech, chunk: String, apiKey: String): ByteArray =
         withFunction(p.model, apiKey) { id -> service.synthesize(apiKey, id, chunk, p.language, p.voice, p.sampleRate) }
+
+    /** Parçayı akışlı sentezler: ses ilk saniyede başlar. Kimlik değişmişse bir kez yeniden çözer. */
+    fun synthesizeStream(p: PreparedSpeech, chunk: String, apiKey: String): Flow<ByteArray> = flow {
+        var emitted = false
+        try {
+            service.synthesizeStream(apiKey, functionId(p.model), chunk, p.language, p.voice, p.sampleRate).collect { emitted = true; emit(it) }
+        } catch (e: RivaException) {
+            if (emitted || !e.notFound) throw e
+            val fresh = service.findFunctionId(apiKey, p.model.functionName) ?: throw e
+            if (fresh == functionId(p.model)) throw e
+            functionIds[p.model] = fresh
+            settings.saveTtsFunctionId(p.model.name, fresh)
+            service.synthesizeStream(apiKey, fresh, chunk, p.language, p.voice, p.sampleRate).collect { emit(it) }
+        }
+    }
 
     private fun functionId(model: TtsModel) = functionIds[model] ?: settings.ttsFunctionId(model.name) ?: model.defaultFunctionId
 

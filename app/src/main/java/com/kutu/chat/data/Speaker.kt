@@ -89,13 +89,14 @@ class Speaker(
             var fellBack = false
             try {
                 val prepared = ai.prepare(text, s, Locale.getDefault().language)
-                val chunks = chunk(text, AI_CHUNK_CHARS)
+                val chunks = chunk(text, prepared.maxChars)
                 val player = playerFactory(prepared.sampleRate).also { activePlayer = it }
                 coroutineScope {
-                    val audio = Channel<ByteArray>(1)
+                    // Üretici, oynatıcıdan önde gider: bir parça çalarken sonrakiler üretilir.
+                    val audio = Channel<ByteArray>(PREFETCH_PIECES)
                     launch {
                         try {
-                            for (c in chunks) audio.send(ai.synthesize(prepared, c, s.apiKey))
+                            for (c in chunks) ai.synthesizeStream(prepared, c, s.apiKey).collect { audio.send(it) }
                             audio.close()
                         } catch (e: CancellationException) {
                             throw e
@@ -187,8 +188,8 @@ class Speaker(
 
     companion object {
         private const val MAX_CHUNK = 3500
-        /** Riva modelleri istek başına ~400-500 karakter kabul eder. */
-        const val AI_CHUNK_CHARS = 350
+        /** Üretilip henüz çalınmamış en fazla ses parçası sayısı (bellek sınırı). */
+        const val PREFETCH_PIECES = 256
         private val TURKISH_CHARS = Regex("[çğıöşüÇĞİÖŞÜ]")
 
         fun looksTurkish(text: String) = TURKISH_CHARS.findAll(text).count() >= 2

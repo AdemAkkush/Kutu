@@ -5,10 +5,12 @@ import com.kutu.chat.data.api.RivaVoices
 enum class TtsEngine { DEVICE, NVIDIA }
 
 /** AUTO: Türkçe ve Magpie'nin desteklemediği diller Chatterbox'a, diğerleri Magpie'ye gider. */
-enum class TtsModel(val label: String, val functionName: String, val defaultFunctionId: String) {
-    AUTO("Otomatik", "", ""),
-    CHATTERBOX("Chatterbox", "ai-chatterbox-multilingual-tts", "ddacc747-1269-4fab-bfd9-8f593dead106"),
-    MAGPIE("Magpie", "ai-magpie-tts-multilingual", "877104f7-e885-42b9-8de8-f6e4c6303969"),
+enum class TtsModel(val label: String, val functionName: String, val defaultFunctionId: String, val maxChars: Int) {
+    AUTO("Otomatik", "", "", 350),
+    /** Sunucu 500 karakterde hata verir (gerçek serviste ölçüldü); küçük bir güvenlik payı bırakılır. */
+    CHATTERBOX("Chatterbox", "ai-chatterbox-multilingual-tts", "ddacc747-1269-4fab-bfd9-8f593dead106", 470),
+    /** 6000 karakter tek istekte sorunsuz okundu; bu yüzden uzun parçalar kullanılır. */
+    MAGPIE("Magpie", "ai-magpie-tts-multilingual", "877104f7-e885-42b9-8de8-f6e4c6303969", 2500),
 }
 
 /** Magpie'de çoğu dilde bulunan konuşmacılar (dile göre liste sunucudan doğrulanır). */

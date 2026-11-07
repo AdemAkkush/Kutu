@@ -137,6 +137,19 @@ class TtsTest {
         assertNull(speaker.error.value)
     }
 
+    @Test fun chunkSizesRespectEachModelsServerLimit() {
+        assertTrue("Chatterbox sunucu sınırı 500", TtsModel.CHATTERBOX.maxChars < 500)
+        assertTrue(TtsModel.MAGPIE.maxChars >= 2000)
+        val long = (1..80).joinToString(" ") { "Bu $it numaralı cümle bugün çok güzel bir gün olduğunu söylüyor." }
+        val chunks = Speaker.chunk(long, TtsModel.CHATTERBOX.maxChars)
+        assertTrue(chunks.all { it.length <= TtsModel.CHATTERBOX.maxChars })
+        assertTrue(chunks.size < long.length / 350)               // 350'lik parçalardan daha az parça = daha az duraklama
+        assertTrue(chunks.dropLast(1).all { it.endsWith(".") })    // cümle sınırlarında kesilir
+        // Tek bir devasa cümle bile sınırı aşmamalı.
+        val oneSentence = "kelime ".repeat(300)
+        assertTrue(Speaker.chunk(oneSentence, 470).all { it.length <= 470 })
+    }
+
     @Test fun stopCancelsPlaybackAndReleasesThePlayer() {
         val service = FakeService(mapOf(TtsModel.CHATTERBOX.defaultFunctionId to chatterbox))
         val players = CopyOnWriteArrayList<FakePlayer>()

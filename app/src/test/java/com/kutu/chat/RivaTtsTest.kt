@@ -62,6 +62,38 @@ class RivaTtsTest {
         val en = riva.synthesize(key, magpie, "Hello, I am Kutu.", "en-US", "Magpie-Multilingual.EN-US.Aria", mv.sampleRate)
         assertTrue(en.size > 10_000)
 
+        // Akışlı sentez: ilk ses hızlı gelmeli, birden çok parça olmalı, WAV başlığı olmamalı.
+        val tr470 = ("Bugün hava çok güzel olduğu için arkadaşlarımla birlikte parka gittik ve orada uzun bir yürüyüş yaptık. ".repeat(5)).take(470).substringBeforeLast(" ")
+        val t0 = System.nanoTime()
+        var firstMs = -1L
+        val pieces = ArrayList<ByteArray>()
+        riva.synthesizeStream(key, chatterbox, tr470, "tr-TR", "Chatterbox-Multilingual.tr-TR.Male", voices.sampleRate).collect {
+            if (firstMs < 0) firstMs = (System.nanoTime() - t0) / 1_000_000
+            pieces += it
+        }
+        val total = pieces.sumOf { it.size }
+        println("LIVE stream chatterbox ${tr470.length} karakter: ilk ses ${firstMs} ms, ${pieces.size} parça, ${total / 2.0 / voices.sampleRate} sn ses")
+        assertTrue("akış birden çok parça vermeli", pieces.size > 1)
+        assertTrue("ilk ses 6 sn içinde gelmeli ($firstMs ms)", firstMs in 0..6000)
+        assertTrue("PCM olmalı, WAV başlığı değil", String(pieces.first().copyOf(4)) != "RIFF")
+        assertTrue(total > 100_000)
+
+        // Sunucu sınırı aşılırsa anlaşılır bir hata gelmeli (uygulama bunu parçalayarak hiç yaşamaz).
+        try {
+            riva.synthesizeStream(key, chatterbox, "a ".repeat(300), "tr-TR", "Chatterbox-Multilingual.tr-TR.Male", voices.sampleRate).collect { }
+            fail("500 karakter aşımı hata vermeli")
+        } catch (e: RivaException) {
+            println("LIVE too long -> ${e.message}")
+            assertTrue(e.message, e.message!!.contains("sınırını aşıyor"))
+        }
+
+        // Magpie: pratikte sınırsız; 2000 karakter tek istekte.
+        val longEn = ("Today the weather was so nice that my friends and I went to the park together and took a long walk there. ".repeat(20)).take(2000)
+        var mpieces = 0; var mbytes = 0
+        riva.synthesizeStream(key, magpie, longEn, "en-US", "Magpie-Multilingual.EN-US.Aria", mv.sampleRate).collect { mpieces++; mbytes += it.size }
+        println("LIVE stream magpie ${longEn.length} karakter: $mpieces parça, ${mbytes / 2.0 / mv.sampleRate} sn ses")
+        assertTrue(mbytes / 2.0 / mv.sampleRate > 60)
+
         try {
             riva.synthesize("", chatterbox, "x", "tr-TR", "Chatterbox-Multilingual.tr-TR.Male", 24000); fail("hata bekleniyordu")
         } catch (e: RivaException) {

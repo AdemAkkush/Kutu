@@ -37,6 +37,22 @@ class CapabilitiesTest {
         list("dead").forEach { assertEquals(it, false, Capabilities.describe(it, catalog).inCatalog) }
     }
 
+    @Test fun pickerHidesEveryUnusableModelAndKeepsEveryWorkingOne() {
+        val all = (list("working") + list("dead") + list("timeouts")).map { Capabilities.describe(it, catalog) }
+        val shown = com.kutu.chat.ui.components.usableModels(all, unavailable = emptySet()).map { it.id }.toSet()
+        list("working").forEach { assertTrue("çalışan model gizlenmemeli: $it", it in shown) }
+        list("dead").forEach { assertFalse("çalışmayan model görünmemeli: $it", it in shown) }
+        // Çalışırken hata alınan model de (404/410 öğrenildi) kaybolur.
+        val afterFailure = com.kutu.chat.ui.components.usableModels(all, unavailable = setOf("google/gemma-4-31b-it")).map { it.id }
+        assertFalse("google/gemma-4-31b-it" in afterFailure)
+        // Kaldırılma tarihi geçmiş model gizlenir, yaklaşan görünür.
+        val llama = Capabilities.describe("meta/llama-3.2-90b-vision-instruct", catalog)
+        assertEquals(1, com.kutu.chat.ui.components.usableModels(listOf(llama), emptySet(), LocalDate.of(2026, 11, 7)).size)
+        assertEquals(0, com.kutu.chat.ui.components.usableModels(listOf(llama), emptySet(), LocalDate.of(2026, 11, 16)).size)
+        // Katalog hiç yüklenemediyse hiçbir model elenmez.
+        assertEquals(1, com.kutu.chat.ui.components.usableModels(listOf(Capabilities.describe("a/b", emptyMap())), emptySet()).size)
+    }
+
     @Test fun emptyCatalogMeansUnknownNotDead() {
         assertNull(Capabilities.describe("google/gemma-4-31b-it", emptyMap()).inCatalog)
     }
