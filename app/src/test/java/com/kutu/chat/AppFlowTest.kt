@@ -57,6 +57,8 @@ class AppFlowTest {
             }
         }
         server.start()
+        // Bildirim izni penceresi testte yanıtlanamaz; izin verilmiş say.
+        org.robolectric.Shadows.shadowOf(ApplicationProvider.getApplicationContext<KutuApp>()).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
         container.settings.update { it.copy(apiKey = "nvapi-test", baseUrl = server.url("/v1").toString()) }
     }
 

@@ -83,6 +83,12 @@ class SettingsStore(private val context: Context) {
     fun cachedModels(): List<String> =
         prefs.getString(KEY_MODELS, "").orEmpty().split('\n').filter { it.isNotBlank() }
 
+    fun notificationsAsked(): Boolean = prefs.getBoolean("notificationsAsked", false)
+
+    fun markNotificationsAsked() {
+        prefs.edit().putBoolean("notificationsAsked", true).apply()
+    }
+
     fun ttsFunctionId(model: String): String? = prefs.getString("ttsFn.$model", null)
 
     fun saveTtsFunctionId(model: String, id: String) {

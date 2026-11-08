@@ -23,6 +23,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -39,6 +40,8 @@ data class Generation(
     val messageId: Long,
     val text: String,
     val reasoning: String,
+    /** Geçici durum bilgisi, örn. "Bağlantı koptu, yeniden deneniyor (1/3)…". */
+    val notice: String = "",
 )
 
 sealed interface EngineEvent {
@@ -70,6 +73,13 @@ class ChatEngine(
     val events: SharedFlow<EngineEvent> = _events.asSharedFlow()
 
     private val jobs = ConcurrentHashMap<Long, Job>()
+
+    private val _activeJobs = MutableStateFlow(0)
+    /** Çalışan üretim / arka plan işi sayısı. Sıfırdan büyükken uygulama ön plan servisiyle canlı tutulur. */
+    val activeJobs: StateFlow<Int> = _activeJobs.asStateFlow()
+
+    /** Bağlantı kopunca yeniden deneme öncesi bekleme süreleri (ms). Testlerde kısaltılır. */
+    @Volatile var retryDelaysMs: List<Long> = listOf(1_500, 4_000, 9_000)
 
     /** Uygulama süreci yanıt sırasında öldüyse yarım kalan mesajları düzeltir; sahipsiz ek dosyalarını siler. */
     suspend fun recoverInterrupted() {
@@ -185,6 +195,16 @@ class ChatEngine(
         jobs[chatId]?.cancel()
     }
 
+    fun stopAll() {
+        jobs.values.forEach { it.cancel() }
+    }
+
+    /** Hata ile yarıda kalmış son yanıtı, kaldığı yerden sürdürür. */
+    fun continueMessage(chatId: Long) {
+        if (isGenerating(chatId)) return
+        launchGeneration(chatId, resumeLast = true) { null }
+    }
+
     private suspend fun insertUserMessage(chatId: Long, text: String, attachments: List<Attachment>) {
         val now = System.currentTimeMillis()
         messages.insert(
@@ -208,70 +228,114 @@ class ChatEngine(
         }
     }
 
-    private fun launchGeneration(chatId: Long, prepare: suspend () -> VersionCarry?) {
+    private fun launchGeneration(chatId: Long, resumeLast: Boolean = false, prepare: suspend () -> VersionCarry?) {
+        _activeJobs.update { it + 1 }
         val job = scope.launch {
             val carry = prepare()
-            runGeneration(chatId, carry)
+            val resumeId = if (resumeLast) {
+                messages.list(chatId).lastOrNull()
+                    ?.takeIf { it.role == ROLE_ASSISTANT && it.status == STATUS_ERROR && it.content.isNotBlank() }?.id
+                    ?: return@launch
+            } else null
+            runGeneration(chatId, carry, resumeId)
         }
         jobs[chatId] = job
-        job.invokeOnCompletion { jobs.remove(chatId, job) }
+        job.invokeOnCompletion {
+            jobs.remove(chatId, job)
+            _activeJobs.update { it - 1 }
+        }
     }
 
-    private suspend fun runGeneration(chatId: Long, carry: VersionCarry?) {
+    private suspend fun runGeneration(chatId: Long, carry: VersionCarry?, resumeId: Long? = null) {
         val settings = settingsStore.settings.value
         val chat = chats.get(chatId) ?: return
         val history = messages.list(chatId)
+        // Kaldığı yerden devam: yarım kalan yanıt bağlama "asistan" mesajı olarak eklenir, bağlamdan çıkarılır.
+        val resumed = resumeId?.let { id -> history.firstOrNull { it.id == id } }
+        val baseHistory = if (resumed != null) history.filter { it.id != resumed.id } else history
         val mems = if (settings.memoryEnabled) memories.list() else emptyList()
         val context = withContext(Dispatchers.IO) {
-            ContextBuilder.build(settings, chat, mems, history, source = attachmentStore)
+            ContextBuilder.build(settings, chat, mems, baseHistory, source = attachmentStore)
         }
         val hadImages = context.any { it.images.isNotEmpty() }
 
-        val placeholder = MessageEntity(
-            chatId = chatId,
-            role = ROLE_ASSISTANT,
-            content = "",
-            model = chat.model,
-            status = STATUS_STREAMING,
-            createdAt = System.currentTimeMillis(),
-            versions = carry?.json.orEmpty(),
-            activeVersion = carry?.active ?: 0,
-        )
-        val messageId = messages.insert(placeholder)
-        var current = placeholder.copy(id = messageId)
+        var current: MessageEntity
+        if (resumed != null) {
+            current = resumed.copy(status = STATUS_STREAMING, error = "")
+            messages.update(current)
+        } else {
+            val placeholder = MessageEntity(
+                chatId = chatId,
+                role = ROLE_ASSISTANT,
+                content = "",
+                model = chat.model,
+                status = STATUS_STREAMING,
+                createdAt = System.currentTimeMillis(),
+                versions = carry?.json.orEmpty(),
+                activeVersion = carry?.active ?: 0,
+            )
+            current = placeholder.copy(id = messages.insert(placeholder))
+        }
+        val messageId = current.id
 
-        val text = StringBuilder()
-        val reasoning = StringBuilder()
+        val text = StringBuilder(resumed?.content.orEmpty())
+        val reasoning = StringBuilder(resumed?.reasoning.orEmpty())
+        var notice = ""
         var lastUi = 0L
         var lastDb = 0L
         fun publish() {
-            _generations.update { it + (chatId to Generation(chatId, messageId, text.toString(), reasoning.toString())) }
+            _generations.update { it + (chatId to Generation(chatId, messageId, text.toString(), reasoning.toString(), notice)) }
         }
         publish()
 
         var failure: String? = null
         try {
-            val request = ChatRequest(
-                model = chat.model,
-                messages = context,
-                stream = true,
-                temperature = settings.temperature,
-                maxTokens = settings.maxTokens,
-            )
-            api.streamChat(settings, request).collect { event ->
-                if (event is StreamEvent.Chunk) {
-                    text.append(event.content)
-                    reasoning.append(event.reasoning)
-                    val now = System.currentTimeMillis()
-                    if (now - lastUi >= UI_THROTTLE_MS) {
-                        lastUi = now
-                        publish()
+            var attempt = 0
+            while (true) {
+                try {
+                    // Bu turda zaten yazılmış bir yanıt kısmı varsa model kaldığı yerden sürdürür; yoksa baştan başlar.
+                    val soFar = splitThinking(text.toString(), "").answer
+                    val requestMessages = if (soFar.isNotBlank()) {
+                        context + ChatMessageDto("assistant", soFar) + ChatMessageDto("user", CONTINUE_PROMPT)
+                    } else {
+                        text.setLength(0); reasoning.setLength(0)
+                        context
                     }
-                    if (now - lastDb >= DB_THROTTLE_MS) {
-                        lastDb = now
-                        current = current.copy(content = text.toString(), reasoning = reasoning.toString())
-                        messages.update(current)
+                    val request = ChatRequest(
+                        model = chat.model,
+                        messages = requestMessages,
+                        stream = true,
+                        temperature = settings.temperature,
+                        maxTokens = settings.maxTokens,
+                    )
+                    api.streamChat(settings, request).collect { event ->
+                        if (event is StreamEvent.Chunk) {
+                            if (notice.isNotEmpty()) notice = ""
+                            text.append(event.content)
+                            reasoning.append(event.reasoning)
+                            val now = System.currentTimeMillis()
+                            if (now - lastUi >= UI_THROTTLE_MS) {
+                                lastUi = now
+                                publish()
+                            }
+                            if (now - lastDb >= DB_THROTTLE_MS) {
+                                lastDb = now
+                                current = current.copy(content = text.toString(), reasoning = reasoning.toString())
+                                messages.update(current)
+                            }
+                        }
                     }
+                    break
+                } catch (e: ApiException) {
+                    // Geçici ağ sorunu (örn. uygulama arka plana atıldı, ağ değişti): bekleyip aynı yanıtı sürdür.
+                    if (!e.retriable || attempt >= retryDelaysMs.size) throw e
+                    val wait = retryDelaysMs[attempt]
+                    attempt++
+                    notice = "Bağlantı koptu, yeniden deneniyor ($attempt/${retryDelaysMs.size})…"
+                    current = current.copy(content = text.toString(), reasoning = reasoning.toString())
+                    messages.update(current)   // yarım yanıtı hemen kaydet; süreç ölse bile kaybolmaz
+                    publish()
+                    delay(wait)
                 }
             }
         } catch (e: CancellationException) {
@@ -284,12 +348,15 @@ class ChatEngine(
             failure = e.message ?: "Bilinmeyen hata"
             markUnavailableIfGone(e, chat.model)
             if (hadImages && e.code in IMAGE_REJECT_CODES) {
-                val text = e.message.orEmpty().lowercase()
-                if ("multimodal" in text || "image" in text || "vision" in text) {
+                val msg = e.message.orEmpty().lowercase()
+                if ("multimodal" in msg || "image" in msg || "vision" in msg) {
                     settingsStore.update { it.copy(visionRejected = it.visionRejected + chat.model, visionConfirmed = it.visionConfirmed - chat.model) }
                 }
                 failure += "\n\nBu model görselleri desteklemiyor olabilir. Görsel destekli bir model seçin " +
                     "(örn. gemma-4-31b-it) ya da görseli kaldırıp tekrar deneyin."
+            }
+            if (e.retriable && splitThinking(text.toString(), "").answer.isNotBlank()) {
+                failure += "\n\nYanıtın bir kısmı kaydedildi; “Devam et” ile kaldığı yerden sürdürebilirsiniz."
             }
         } catch (e: Exception) {
             failure = "Beklenmeyen hata: ${e.message ?: e.javaClass.simpleName}"
@@ -314,8 +381,14 @@ class ChatEngine(
             settingsStore.update { it.copy(visionConfirmed = it.visionConfirmed + chat.model, visionRejected = it.visionRejected - chat.model) }
         }
         if (failure == null) {
-            scope.launch { postProcess(chatId) }
+            tracked { postProcess(chatId) }
         }
+    }
+
+    /** Arka plan işi çalıştığı sürece [activeJobs] > 0 olur; ön plan servisi buna göre açık kalır. */
+    private fun tracked(block: suspend () -> Unit) {
+        _activeJobs.update { it + 1 }
+        scope.launch { try { block() } finally { _activeJobs.update { it - 1 } } }
     }
 
     private suspend fun finish(chatId: Long, base: MessageEntity, text: String, reasoning: String, error: String?) {
@@ -435,11 +508,12 @@ class ChatEngine(
         chats.setSummary(chatId, summary, toFold.last().id)
     }
 
-    private companion object {
+    companion object {
         const val UI_THROTTLE_MS = 50L
         const val DB_THROTTLE_MS = 1500L
         const val SUMMARY_TRIGGER = 0.7
         const val KEEP_RECENT = 6
         val IMAGE_REJECT_CODES = setOf(400, 415, 422)
+        const val CONTINUE_PROMPT = "Yanıtın yarıda kesildi. Kaldığın yerden, daha önce yazdıklarını tekrarlamadan devam et."
     }
 }

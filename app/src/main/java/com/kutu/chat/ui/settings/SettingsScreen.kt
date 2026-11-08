@@ -293,6 +293,41 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit, onOpenMemory: () -
             speakerError?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
 
             HorizontalDivider()
+            Section("Arka planda çalışma")
+            val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+            var resumes by remember { mutableStateOf(0) }
+            androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
+                val observer = androidx.lifecycle.LifecycleEventObserver { _, event -> if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) resumes++ }
+                lifecycleOwner.lifecycle.addObserver(observer)
+                onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+            }
+            val unrestricted = remember(resumes) {
+                (context.getSystemService(android.content.Context.POWER_SERVICE) as android.os.PowerManager).isIgnoringBatteryOptimizations(context.packageName)
+            }
+            Text(
+                "Yanıt hazırlanırken başka uygulamaya geçseniz de üretim bildirimli bir servisle sürer ve bağlantı koparsa otomatik yeniden denenir. " +
+                    "Bazı telefonlar (Xiaomi, Samsung, Huawei…) pil tasarrufu için uygulamayı yine de durdurabilir; öyleyse Kutu'yu pil kısıtlamasından muaf tutun.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                if (unrestricted) "Pil kısıtlaması: yok (önerilen)" else "Pil kısıtlaması: açık",
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (unrestricted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+            )
+            if (!unrestricted) {
+                OutlinedButton(onClick = {
+                    val intent = android.content.Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                    runCatching { context.startActivity(intent) }.onFailure {
+                        context.startActivity(
+                            android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                                .setData(Uri.parse("package:" + context.packageName)),
+                        )
+                    }
+                }) { Text("Pil ayarlarını aç") }
+            }
+
+            HorizontalDivider()
             Section("Yedekleme")
             Text(
                 "Tüm sohbetleri, eklerini, hafızayı, kişilikleri ve şablonları tek bir ZIP dosyasına aktarın; " +

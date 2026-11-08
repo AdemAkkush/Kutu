@@ -46,6 +46,13 @@ Kotlin + Jetpack Compose (Material 3) ile yazıldı; `https://integrate.api.nvid
 - Tek mesajı silme, sohbet içinde arama (sonuçlar arasında gezinme)
 - **Yedekleme:** tüm sohbetler, ekler, hafıza, kişilikler ve şablonlar tek ZIP dosyasına aktarılır / geri yüklenir (tekrar içe aktarmak kopya oluşturmaz; API anahtarı yedeğe girmez)
 
+**Arka planda kesintisiz çalışma**
+- Yanıt hazırlanırken başka uygulamaya geçebilirsiniz: üretim sürerken bildirimli bir **ön plan servisi**, kısmi uyku kilidi ve Wi-Fi kilidi uygulamayı canlı tutar (bitince kapanır; bildirimdeki "Durdur" ile iptal edilebilir). Android 13+ için ilk gönderimde bildirim izni istenir; reddedilse de üretim sürer
+- Bağlantı yine de koparsa (ağ değişimi, proxy, sistem) **otomatik yeniden denenir** (3 kez, giderek artan bekleyişle): yanıt hiç başlamadıysa baştan, yazılmışsa **kaldığı yerden** sürdürülür; yarım yanıt her denemede kaydedilir
+- Akış `[DONE]`/`finish_reason` olmadan kapanırsa artık "tamamlandı" sayılmaz, kopma olarak ele alınır (önceden yarım yanıt sessizce kaydedilebilirdi)
+- Tüm denemeler tükenirse ya da süreç sistem tarafından öldürülürse yarım yanıt korunur ve **"Devam et"** düğmesi çıkar
+- Ayarlar'da pil kısıtlaması durumu görünür; agresif pil yönetimli telefonlarda Kutu'yu muaf tutmak için sistem ekranına kısayol vardır
+
 **Model seçimi — yeteneğe göre gruplama**
 - API'den canlı model listesi (`/v1/models`) + NVIDIA'nın herkese açık kataloğu (build.nvidia.com) birleştirilir
 - Filtre çipleri: ⭐ Favoriler, 👁 Görsel, 🧠 Düşünen, 💻 Kod, 🌍 Çeviri, 📄 Belge, ⚡ Hızlı, 🛠 Ajan; her modelde rozetler görünür, popüler olanlar üstte sıralanır

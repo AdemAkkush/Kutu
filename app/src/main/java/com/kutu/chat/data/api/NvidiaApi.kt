@@ -48,15 +48,22 @@ class NvidiaApi(
                             close(ApiException("Sunucudan boş yanıt geldi."))
                             return
                         }
+                        // Akış [DONE] ya da finish_reason ile bitmeden kapanırsa bağlantı kopmuştur (arka plana atma,
+                        // ağ değişimi, proxy). Bunu "tamamlandı" saymak yarım yanıtı sessizce kaydederdi.
+                        var completed = false
                         while (true) {
                             val line = source.readUtf8Line() ?: break
                             when (val event = parseSseLine(line)) {
                                 null -> Unit
-                                StreamEvent.Done -> break
-                                else -> trySend(event)
+                                StreamEvent.Done -> { completed = true; break }
+                                else -> {
+                                    if ((event as StreamEvent.Chunk).finish) completed = true
+                                    trySend(event)
+                                }
                             }
                         }
-                        close()
+                        if (completed) close()
+                        else close(ApiException("Bağlantı yarıda kesildi (akış tamamlanmadan kapandı).", retriable = true))
                     } catch (e: IOException) {
                         close(if (call.isCanceled()) null else networkError(e))
                     } catch (e: Exception) {
@@ -146,7 +153,7 @@ class NvidiaApi(
 
         fun defaultClient(): OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(20, TimeUnit.SECONDS)
-            .readTimeout(90, TimeUnit.SECONDS)
+            .readTimeout(150, TimeUnit.SECONDS)
             .writeTimeout(60, TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
             .build()
@@ -195,17 +202,18 @@ class NvidiaApi(
             if (payload.isEmpty()) return null
             if (payload == "[DONE]") return StreamEvent.Done
             val chunk = runCatching { JSON.decodeFromString<StreamChunk>(payload) }.getOrNull() ?: return null
-            val delta = chunk.choices.firstOrNull()?.delta ?: return null
-            val content = delta.content.orEmpty()
-            val reasoning = delta.reasoningContent ?: delta.reasoning.orEmpty()
-            if (content.isEmpty() && reasoning.isEmpty()) return null
-            return StreamEvent.Chunk(content, reasoning)
+            val choice = chunk.choices.firstOrNull() ?: return null
+            val content = choice.delta?.content.orEmpty()
+            val reasoning = choice.delta?.reasoningContent ?: choice.delta?.reasoning.orEmpty()
+            val finish = !choice.finishReason.isNullOrEmpty()
+            if (content.isEmpty() && reasoning.isEmpty() && !finish) return null
+            return StreamEvent.Chunk(content, reasoning, finish)
         }
 
         private fun networkError(e: IOException) = when (e) {
             is java.net.SocketTimeoutException ->
-                ApiException("Model 90 saniye içinde yanıt vermedi. Model yoğun ya da kapalı olabilir; başka bir model deneyin.")
-            else -> ApiException("Bağlantı hatası: ${e.message ?: e.javaClass.simpleName}")
+                ApiException("Model 150 saniye içinde yanıt vermedi. Model yoğun ya da kapalı olabilir; başka bir model deneyin.")
+            else -> ApiException("Bağlantı koptu: ${e.message ?: e.javaClass.simpleName}", retriable = true)
         }
 
         private fun httpError(res: Response): ApiException {
@@ -218,7 +226,7 @@ class NvidiaApi(
                 429 -> "İstek sınırı aşıldı (429): biraz bekleyip tekrar deneyin."
                 else -> "Sunucu hatası (${res.code})"
             }
-            return ApiException(if (detail.isBlank()) prefix else "$prefix\n$detail", res.code)
+            return ApiException(if (detail.isBlank()) prefix else "$prefix\n$detail", res.code, retriable = res.code in 502..504)
         }
 
         fun extractErrorMessage(raw: String): String {

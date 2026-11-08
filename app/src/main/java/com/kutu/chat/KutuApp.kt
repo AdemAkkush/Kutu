@@ -11,7 +11,13 @@ import com.kutu.chat.data.SettingsStore
 import com.kutu.chat.data.api.NvidiaApi
 import com.kutu.chat.data.db.AppDatabase
 import com.kutu.chat.domain.ChatEngine
+import android.content.Intent
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
@@ -29,6 +35,21 @@ class AppContainer(val app: Application) {
 
     init {
         scope.launch { engine.recoverInterrupted() }
+        // Üretim/arka plan işi sürerken ön plan servisini aç, bitince (kısa bir bekleyişle) kapat.
+        scope.launch {
+            engine.activeJobs.map { it > 0 }.distinctUntilChanged().collectLatest { busy ->
+                if (busy) {
+                    runCatching { ContextCompat.startForegroundService(app, Intent(app, GenerationService::class.java)) }
+                } else {
+                    delay(SERVICE_LINGER_MS)
+                    app.stopService(Intent(app, GenerationService::class.java))
+                }
+            }
+        }
+    }
+
+    private companion object {
+        const val SERVICE_LINGER_MS = 2_500L
     }
 }
 

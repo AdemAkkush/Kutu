@@ -130,6 +130,7 @@ fun AssistantMessage(
     onSpeak: (String) -> Unit,
     onDelete: () -> Unit,
     onVersion: (Int) -> Unit,
+    onContinue: () -> Unit,
 ) {
     val versionCount = remember(message.versions) { Versions.count(message) }
     var overflow by remember { mutableStateOf(false) }
@@ -153,6 +154,13 @@ fun AssistantMessage(
             ThinkingBlock(split.thinking, active = streaming && split.answer.isBlank())
         }
 
+        if (streaming && generation!!.notice.isNotBlank()) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                Text(generation.notice, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.tertiary)
+            }
+        }
+
         if (waiting) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
@@ -174,7 +182,8 @@ fun AssistantMessage(
                     Text(message.error, style = MaterialTheme.typography.bodyMedium)
                     if (isLast) {
                         Row {
-                            TextButton(onClick = onRegenerate) { Text("Tekrar dene") }
+                            if (message.content.isNotBlank()) TextButton(onClick = onContinue) { Text("Devam et") }
+                            TextButton(onClick = onRegenerate) { Text(if (message.content.isNotBlank()) "Baştan üret" else "Tekrar dene") }
                             TextButton(onClick = onPickModel) { Text("Model değiştir") }
                         }
                     }

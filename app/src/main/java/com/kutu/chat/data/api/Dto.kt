@@ -108,8 +108,13 @@ data class ModelsResponse(val data: List<ModelInfo> = emptyList())
 data class ModelInfo(val id: String)
 
 sealed interface StreamEvent {
-    data class Chunk(val content: String, val reasoning: String) : StreamEvent
+    /** [finish]: sunucu bu parçada yanıtın bittiğini bildirdi (finish_reason). */
+    data class Chunk(val content: String, val reasoning: String, val finish: Boolean = false) : StreamEvent
     data object Done : StreamEvent
 }
 
-class ApiException(message: String, val code: Int = 0) : Exception(message)
+/**
+ * [retriable]: geçici bir ağ/sunucu sorunu (bağlantı koptu, 502/503/504). Aynı istek yeniden denenebilir.
+ * API'nin açık reddi (401, 404, 400…) ya da zaman aşımı yeniden denenmez.
+ */
+class ApiException(message: String, val code: Int = 0, val retriable: Boolean = false) : Exception(message)

@@ -237,6 +237,14 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         currentChatId.value?.let { c.engine.regenerate(it) }
     }
 
+    /** Hata ile yarım kalmış yanıtı kaldığı yerden sürdürür. */
+    fun continueMessage() {
+        currentChatId.value?.let { c.engine.continueMessage(it) }
+    }
+
+    fun notificationsAsked() = c.settings.notificationsAsked()
+    fun markNotificationsAsked() = c.settings.markNotificationsAsked()
+
     fun editAndResend(messageId: Long, text: String) {
         currentChatId.value?.let { c.engine.editAndResend(it, messageId, text) }
     }

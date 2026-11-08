@@ -200,6 +200,21 @@ fun ChatScreen(
         }
     }
 
+    // Yanıt arka planda sürerken bildirim gösterilebilmesi için (Android 13+) ilk gönderimde bir kez izin istenir.
+    // Reddedilse bile üretim ön plan servisiyle sürer; yalnızca bildirim görünmez.
+    val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { vm.send() }
+    val sendMessage: () -> Unit = {
+        val needs = android.os.Build.VERSION.SDK_INT >= 33 && !vm.notificationsAsked() &&
+            androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.POST_NOTIFICATIONS) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (needs) {
+            vm.markNotificationsAsked()
+            notificationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            vm.send()
+        }
+    }
+
     // Hafıza güncellemelerini kullanıcıya göster.
     LaunchedEffect(Unit) {
         vm.memoryEvents.collect { event ->
@@ -349,6 +364,7 @@ fun ChatScreen(
                 onCamera = ::launchCamera,
                 onFile = { pickFiles.launch(arrayOf("*/*")) },
                 onMic = ::launchDictation,
+                onSend = sendMessage,
             )
         }
     }
@@ -512,6 +528,7 @@ private fun MessageList(
                             onSpeak = { vm.toggleSpeak(m.id, it) },
                             onDelete = { onDeleteMessage(m.id) },
                             onVersion = { vm.switchVersion(m.id, it) },
+                            onContinue = vm::continueMessage,
                         )
                     }
                 }
@@ -602,6 +619,7 @@ private fun InputBar(
     onCamera: () -> Unit,
     onFile: () -> Unit,
     onMic: () -> Unit,
+    onSend: () -> Unit,
 ) {
     var attachMenu by remember { mutableStateOf(false) }
     var templateMenu by remember { mutableStateOf(false) }
@@ -668,7 +686,7 @@ private fun InputBar(
                 )
                 when {
                     generating -> FilledIconButton(onClick = vm::stop) { Icon(Icons.Default.Stop, contentDescription = "Durdur") }
-                    canSend -> FilledIconButton(onClick = vm::send, enabled = !vm.attaching) {
+                    canSend -> FilledIconButton(onClick = onSend, enabled = !vm.attaching) {
                         Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Gönder")
                     }
                     else -> FilledIconButton(onClick = onMic) { Icon(Icons.Default.Mic, contentDescription = "Sesle yaz") }
