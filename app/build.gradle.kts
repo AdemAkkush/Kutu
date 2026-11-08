@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -5,6 +7,13 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
     id("com.google.devtools.ksp")
 }
+
+// Release imzası: kök dizindeki keystore.properties (repoya girmez) ya da KUTU_* ortam değişkenleri.
+val keystoreProps = Properties().apply {
+    val f = rootProject.file("keystore.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+fun signingValue(key: String, env: String): String? = keystoreProps.getProperty(key) ?: System.getenv(env)
 
 android {
     namespace = "com.kutu.chat"
@@ -18,8 +27,22 @@ android {
         versionName = "1.0"
     }
 
+    signingConfigs {
+        val storeFile = signingValue("storeFile", "KUTU_STORE_FILE")
+        if (storeFile != null) {
+            create("release") {
+                this.storeFile = rootProject.file(storeFile)
+                storePassword = signingValue("storePassword", "KUTU_STORE_PASSWORD")
+                keyAlias = signingValue("keyAlias", "KUTU_KEY_ALIAS") ?: "kutu"
+                keyPassword = signingValue("keyPassword", "KUTU_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
+            // Anahtar yoksa imzasız çıkar (CI / başkası derlerse derleme yine de çalışır).
+            signingConfigs.findByName("release")?.let { signingConfig = it }
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")

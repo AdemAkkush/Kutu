@@ -89,6 +89,23 @@ echo "sdk.dir=/yol/android-sdk" > local.properties   # Android Studio bunu kendi
 
 Ya da projeyi doğrudan Android Studio ile açın.
 
+### İmzalı release APK
+Telefona kurulabilen sürüm için bir imza anahtarı gerekir. Kök dizine `keystore.properties` koyun (repoya girmez):
+
+```properties
+storeFile=kutu-release.jks
+storePassword=...
+keyAlias=kutu
+keyPassword=...
+```
+Anahtar yoksa `keytool -genkeypair -keystore kutu-release.jks -alias kutu -keyalg RSA -keysize 2048 -validity 10000` ile üretin. Sonra:
+
+```bash
+./gradlew :app:assembleRelease   # app/build/outputs/apk/release/app-release.apk (R8 ile küçültülmüş, imzalı)
+```
+Anahtar yoksa derleme yine çalışır ama APK imzasız çıkar. **Anahtarı ve şifreleri kaybetmeyin:** güncellemeler aynı anahtarla imzalanmak zorundadır.
+
+
 ## Mimari
 
 ```
