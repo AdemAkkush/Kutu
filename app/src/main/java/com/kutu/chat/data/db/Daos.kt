@@ -42,8 +42,8 @@ interface ChatDao {
     @Query("UPDATE chats SET title = :title, titleLocked = :locked WHERE id = :id")
     suspend fun setTitle(id: Long, title: String, locked: Boolean)
 
-    @Query("UPDATE chats SET model = :model WHERE id = :id")
-    suspend fun setModel(id: Long, model: String)
+    @Query("UPDATE chats SET provider = :provider, model = :model WHERE id = :id")
+    suspend fun setModel(id: Long, provider: String, model: String)
 
     @Query("UPDATE chats SET systemPrompt = :prompt WHERE id = :id")
     suspend fun setSystemPrompt(id: Long, prompt: String)

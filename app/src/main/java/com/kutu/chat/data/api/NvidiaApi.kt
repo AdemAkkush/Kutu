@@ -90,7 +90,8 @@ class NvidiaApi(
         val text = call.await()
         val parsed = runCatching { JSON.decodeFromString<ModelsResponse>(text) }
             .getOrElse { throw ApiException("Model listesi işlenemedi: ${it.message}") }
-        return parsed.data.map { it.id }.distinct().sorted()
+        // Gemini kimlikleri "models/…" önekiyle döndürür; sohbet uç noktası öneksiz hâlini bekler.
+        return parsed.data.map { it.id.removePrefix("models/") }.distinct().sorted()
     }
 
     /**

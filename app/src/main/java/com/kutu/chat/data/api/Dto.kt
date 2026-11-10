@@ -74,6 +74,8 @@ data class ChatRequest(
     val stream: Boolean,
     val temperature: Float? = null,
     @SerialName("max_tokens") val maxTokens: Int? = null,
+    /** Bazı sağlayıcılar (OpenAI'nin yeni modelleri) `max_tokens` yerine bunu ister. */
+    @SerialName("max_completion_tokens") val maxCompletionTokens: Int? = null,
 )
 
 @Serializable

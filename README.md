@@ -1,7 +1,34 @@
-# Kutu — NVIDIA Build için Android sohbet uygulaması
+# Kutu — çok sağlayıcılı Android yapay zekâ sohbet uygulaması
 
 NVIDIA Build'deki (build.nvidia.com) modelleri kullanarak sohbet etmenizi sağlayan, hafızalı bir Android uygulaması.
 Kotlin + Jetpack Compose (Material 3) ile yazıldı; `https://integrate.api.nvidia.com/v1` OpenAI uyumlu uç noktasını kullanır.
+
+## Sağlayıcılar
+
+Kutu, sohbet API'si OpenAI biçimiyle (`/chat/completions`) uyumlu sağlayıcılarla çalışır. Ayarlar → **Sağlayıcılar**
+bölümünden istediklerinize anahtar ekleyin; model seçicide sağlayıcılar arasında geçiş yapılır ve her sohbet kendi
+sağlayıcısını/modelini hatırlar.
+
+| Sağlayıcı | Not |
+|---|---|
+| NVIDIA Build | Ücretsiz katman; yapay zekâ seslendirmesi (Riva) de bu anahtarı kullanır. Yetenek etiketleri ve emekli model süzme yalnızca burada katalogdan gelir. |
+| OpenRouter | Tek anahtarla Claude, GPT, Gemini, Llama… |
+| Groq, Google Gemini, OpenAI, Mistral, DeepSeek, xAI, Together AI, Cerebras | Hazır tanımlı adresler. |
+| Özel / yerel sunucu | Ollama, LM Studio, vLLM vb. için kendi adresiniz (anahtar isteğe bağlı). |
+
+- **Canlı doğrulama yalnızca NVIDIA Build ile yapıldı.** Diğer sağlayıcılar aynı protokolü kullanır ve sahte sunucuyla
+  test edilmiştir, ancak gerçek anahtarlarla denenmemiştir.
+- Anthropic'in kendi API'si OpenAI biçiminde olmadığından doğrudan eklenmedi; Claude modellerine **OpenRouter** üzerinden ulaşılır.
+- `max_tokens` yerine `max_completion_tokens` isteyen ya da `temperature` kabul etmeyen modellerde istek otomatik onarılıp yinelenir.
+- Yerel sunuculara (`http://192.168.…`) bağlanabilmek için uygulamada şifresiz HTTP'ye izin verilir; hazır sağlayıcıların hepsi HTTPS'tir.
+
+### Bu sürümde gelenler (1.1)
+
+- Yeni görünüm: marka renkleri, koyu/açık tema, isteğe bağlı duvar kâğıdı renkleri, renkli kod blokları, tarihe göre gruplanan sohbet listesi.
+- **Başka modelle yanıtla**: bir yanıtı farklı sağlayıcı/modelle yeniden üretin; sürümler arasında geçin ve karşılaştırın.
+- Yanıt başlığında model, sağlayıcı ve süre.
+- Başka uygulamalardan **Paylaş → Kutu** ile metin, resim ve dosya gönderme.
+- Tablo → CSV paylaşımı, dokunsal geri bildirim, boş ekranda öneri kartları.
 
 ## Özellikler
 

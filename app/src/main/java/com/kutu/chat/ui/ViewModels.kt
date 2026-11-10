@@ -25,6 +25,8 @@ import com.kutu.chat.domain.PersonaDef
 import com.kutu.chat.domain.TemplateDef
 import com.kutu.chat.domain.toDef
 import com.kutu.chat.domain.EngineEvent
+import com.kutu.chat.domain.ModelRef
+import com.kutu.chat.domain.Providers
 import com.kutu.chat.domain.Generation
 import com.kutu.chat.domain.splitThinking
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -51,7 +53,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     /** null = henüz oluşturulmamış yeni sohbet (ilk mesajda oluşturulur). */
     val currentChatId = MutableStateFlow<Long?>(null)
     val ready = MutableStateFlow(false)
-    private val pendingModel = MutableStateFlow<String?>(null)
+    private val pendingModel = MutableStateFlow<ModelRef?>(null)
 
     var input by mutableStateOf("")
 
@@ -87,9 +89,11 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         id?.let { map[it] }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
-    val activeModel: StateFlow<String> = combine(chat, pendingModel, pendingPersona, c.settings.settings) { chat, picked, persona, s ->
-        chat?.model ?: picked ?: persona?.model?.takeIf { it.isNotBlank() } ?: s.defaultModel
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), c.settings.settings.value.defaultModel)
+    /** Geçerli sohbetin (ya da oluşturulacak yeni sohbetin) sağlayıcısı + modeli. */
+    val activeRef: StateFlow<ModelRef> = combine(chat, pendingModel, pendingPersona, c.settings.settings) { chat, picked, persona, s ->
+        chat?.let { ModelRef(it.provider, it.model) } ?: picked
+            ?: persona?.model?.takeIf { it.isNotBlank() }?.let(ModelRef::parse) ?: s.defaultRef
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), c.settings.settings.value.defaultRef)
 
     /** Hazır + kullanıcı kişilikleri / şablonları. */
     val personas: StateFlow<List<PersonaDef>> = c.db.personaDao().observeAll()
@@ -110,15 +114,15 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         // API anahtarı girilince/değişince model listesini (ve çalışan varsayılanları) otomatik yenile.
         viewModelScope.launch {
             c.settings.settings
-                .map { it.apiKey.trim() }
+                .map { Triple(it.apiKey.trim(), it.providerKeys, it.customBaseUrl.trim()) }
                 .distinctUntilChanged()
                 .debounce(1200)
-                .collect { key -> if (key.isNotBlank()) c.models.refresh() }
+                .collect { c.models.refreshAll() }
         }
     }
 
-    fun refreshModels() {
-        viewModelScope.launch { c.models.refresh() }
+    fun refreshModels(provider: String) {
+        viewModelScope.launch { c.models.refresh(provider) }
     }
 
     fun newChat() {
@@ -155,7 +159,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         viewModelScope.launch {
             val id = currentChatId.value ?: run {
                 val persona = pendingPersona.value
-                c.engine.createChat(activeModel.value, persona?.systemPrompt.orEmpty(), persona?.label.orEmpty())
+                val ref = activeRef.value
+                c.engine.createChat(ref.model, persona?.systemPrompt.orEmpty(), persona?.label.orEmpty(), ref.provider)
             }.also {
                 currentChatId.value = it
                 pendingPersona.value = null
@@ -170,6 +175,20 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     fun addImage(uri: Uri) = attach { listOf(c.attachments.importImage(uri)) }
     fun addTextFile(uri: Uri) = attach { listOf(c.attachments.importText(uri)) }
     fun addDocument(uri: Uri) = attach { c.attachments.importDocument(uri) }
+
+    /** Kameranın yazdığı geçici dosyayı ekler ve ardından siler (önbellekte birikmesin). */
+    fun addCameraPhoto(file: java.io.File) = attach {
+        try { listOf(c.attachments.importImage(Uri.fromFile(file))) } finally { file.delete() }
+    }
+
+    /** Başka bir uygulamadan "Paylaş → Kutu" ile gelen metin ve dosyalar. */
+    fun receiveShared(text: String?, uris: List<Uri>) {
+        if (!text.isNullOrBlank()) input = if (input.isBlank()) text else input.trimEnd() + "\n\n" + text
+        uris.take(MAX_PENDING).forEach { uri ->
+            val type = runCatching { c.app.contentResolver.getType(uri) }.getOrNull().orEmpty()
+            if (type.startsWith("image/")) addImage(uri) else addDocument(uri)
+        }
+    }
 
     private fun attach(load: suspend () -> List<Attachment>) {
         if (pending.size >= MAX_PENDING) {
@@ -237,6 +256,11 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         currentChatId.value?.let { c.engine.regenerate(it) }
     }
 
+    /** Son yanıtı başka bir modelle yeniden üretir; eski yanıt sürüm olarak kalır, karşılaştırılabilir. */
+    fun regenerateWith(ref: ModelRef) {
+        currentChatId.value?.let { c.engine.regenerate(it, ref) }
+    }
+
     /** Hata ile yarım kalmış yanıtı kaldığı yerden sürdürür. */
     fun continueMessage() {
         currentChatId.value?.let { c.engine.continueMessage(it) }
@@ -249,10 +273,10 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         currentChatId.value?.let { c.engine.editAndResend(it, messageId, text) }
     }
 
-    fun selectModel(model: String) {
+    fun selectModel(ref: ModelRef) {
         val id = currentChatId.value
-        if (id == null) pendingModel.value = model else viewModelScope.launch { chatDao.setModel(id, model) }
-        c.settings.update { it.copy(defaultModel = model) }
+        if (id == null) pendingModel.value = ref else viewModelScope.launch { chatDao.setModel(id, ref.provider, ref.model) }
+        c.settings.update { it.copy(defaultProvider = ref.provider, defaultModel = ref.model) }
     }
 
     fun toggleFavorite(model: String) {
@@ -403,8 +427,8 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     /** Seçili ses ayarlarıyla kısa bir örnek okutur (id -1 = Türkçe, -2 = İngilizce örnek). */
     fun speakSample(id: Long, text: String) = c.speaker.toggle(id, text)
 
-    fun refreshModels() {
-        viewModelScope.launch { c.models.refresh() }
+    fun refreshModels(provider: String = Providers.NVIDIA) {
+        viewModelScope.launch { c.models.refresh(provider) }
     }
 
     fun toggleFavorite(model: String) {

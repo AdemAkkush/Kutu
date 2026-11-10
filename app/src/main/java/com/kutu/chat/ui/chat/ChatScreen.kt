@@ -102,15 +102,48 @@ import com.kutu.chat.ui.components.AttachmentStrip
 import com.kutu.chat.ui.components.ConfirmDialog
 import com.kutu.chat.ui.components.ModelPickerSheet
 import com.kutu.chat.ui.components.TextInputDialog
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.EditNote
+import androidx.compose.material.icons.filled.Lightbulb
+import androidx.compose.material.icons.filled.Translate
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import com.kutu.chat.domain.ModelRef
+import com.kutu.chat.domain.Providers
+import com.kutu.chat.ui.components.KutuLogo
+import com.kutu.chat.ui.components.ProviderDot
+import com.kutu.chat.ui.components.describeModel
+import com.kutu.chat.ui.components.describeModels
+import com.kutu.chat.ui.theme.KutuBrand
 import java.io.File
 import java.util.Locale
 import kotlinx.coroutines.launch
 
+private data class Suggestion(val icon: ImageVector, val title: String, val prompt: String)
+
 private val SUGGESTIONS = listOf(
-    "Bana bir Kotlin coroutine örneği göster",
-    "Bu hafta için çalışma planı hazırla",
-    "Bir e-postayı daha profesyonel hale getir",
+    Suggestion(Icons.Default.Code, "Kod yaz", "Bana bir Kotlin coroutine örneği göster"),
+    Suggestion(Icons.Default.EditNote, "Metni düzelt", "Şu e-postayı daha profesyonel hale getir:\n\n"),
+    Suggestion(Icons.Default.Lightbulb, "Fikir üret", "Bu hafta için verimli bir çalışma planı hazırla"),
+    Suggestion(Icons.Default.Translate, "Çevir", "Şunu İngilizceye çevir:\n\n"),
 )
+
+private enum class PickerMode { SELECT, COMPARE }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -123,12 +156,13 @@ fun ChatScreen(
     onOpenPersonas: () -> Unit,
 ) {
     val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
     val chat by vm.chat.collectAsStateWithLifecycle()
     val messages by vm.messages.collectAsStateWithLifecycle()
     val generation by vm.generation.collectAsStateWithLifecycle()
     val settings by vm.settings.collectAsStateWithLifecycle()
     val modelsState by vm.modelsState.collectAsStateWithLifecycle()
-    val activeModel by vm.activeModel.collectAsStateWithLifecycle()
+    val activeRef by vm.activeRef.collectAsStateWithLifecycle()
     val ready by vm.ready.collectAsStateWithLifecycle()
     val personas by vm.personas.collectAsStateWithLifecycle()
     val templates by vm.templates.collectAsStateWithLifecycle()
@@ -137,17 +171,17 @@ fun ChatScreen(
     val speakerError by vm.speakerError.collectAsStateWithLifecycle()
     val speakerPreparing by vm.speakerPreparing.collectAsStateWithLifecycle()
 
-    val describe: (String) -> ModelMeta = remember(modelsState.catalog, settings.visionConfirmed, settings.visionRejected) {
-        { id -> Capabilities.describe(id, modelsState.catalog, settings.visionConfirmed, settings.visionRejected) }
-    }
-    // Resim eklenmişken seçili model görsel anlamıyorsa, en iyi görsel modeli öner.
+    // Resim eklenmişken seçili model görsel anlamıyorsa, aynı sağlayıcıdaki en iyi görsel modeli öner.
     val hasPendingImage = vm.pending.any { it.type == ATT_IMAGE }
-    val visionSuggestion = remember(hasPendingImage, activeModel, modelsState.models, modelsState.catalog, settings.unavailableModels, settings.visionConfirmed, settings.visionRejected) {
-        if (!hasPendingImage || describe(activeModel).has(Cap.VISION)) null
-        else Capabilities.best(Cap.VISION, modelsState.models.map(describe), settings.unavailableModels)
+    val visionSuggestion = remember(hasPendingImage, activeRef, modelsState, settings.unavailableModels, settings.visionConfirmed, settings.visionRejected) {
+        if (!hasPendingImage || describeModel(activeRef, modelsState, settings).has(Cap.VISION)) null
+        else Capabilities.best(
+            Cap.VISION, describeModels(activeRef.provider, modelsState, settings),
+            settings.unavailableModels.map { ModelRef.parse(it) }.filter { it.provider == activeRef.provider }.map { it.model }.toSet(),
+        )
     }
 
-    var showModelPicker by remember { mutableStateOf(false) }
+    var pickerMode by remember { mutableStateOf<PickerMode?>(null) }
     var showMenu by remember { mutableStateOf(false) }
     var showRename by remember { mutableStateOf(false) }
     var showSystemPrompt by remember { mutableStateOf(false) }
@@ -164,10 +198,12 @@ fun ChatScreen(
     val pickFiles = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         uris.forEach(vm::addDocument)
     }
-    var cameraFile by remember { mutableStateOf<File?>(null) }
+    // Kamera açıkken sistem etkinliği yeniden oluşturabilir; dosya yolu bu yüzden kalıcı durumda tutulur.
+    var cameraPath by rememberSaveable { mutableStateOf<String?>(null) }
     val takePhoto = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
-        val file = cameraFile
-        if (ok && file != null) vm.addImage(android.net.Uri.fromFile(file))
+        val file = cameraPath?.let(::File)
+        if (file != null) { if (ok) vm.addCameraPhoto(file) else file.delete() }
+        cameraPath = null
     }
     val dictation = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
@@ -178,7 +214,7 @@ fun ChatScreen(
     fun launchCamera() {
         val dir = File(context.cacheDir, "camera").apply { mkdirs() }
         val file = File.createTempFile("foto_", ".jpg", dir)
-        cameraFile = file
+        cameraPath = file.path
         val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
         try {
             takePhoto.launch(uri)
@@ -204,6 +240,7 @@ fun ChatScreen(
     // Reddedilse bile üretim ön plan servisiyle sürer; yalnızca bildirim görünmez.
     val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { vm.send() }
     val sendMessage: () -> Unit = {
+        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
         val needs = android.os.Build.VERSION.SDK_INT >= 33 && !vm.notificationsAsked() &&
             androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.POST_NOTIFICATIONS) !=
             android.content.pm.PackageManager.PERMISSION_GRANTED
@@ -251,8 +288,9 @@ fun ChatScreen(
         else messages.filter { it.content.contains(q, ignoreCase = true) }.map { it.id }
     }
     var matchIndex by remember { mutableIntStateOf(0) }
-    LaunchedEffect(matches) { matchIndex = (matches.size - 1).coerceAtLeast(0) }
-    val focusId = matches.getOrNull(matchIndex)
+    // Yalnızca sorgu değişince en yeni eşleşmeye git; yanıt akarken (mesajlar güncellenirken) konum korunur.
+    LaunchedEffect(vm.searchQuery, vm.searchOpen) { matchIndex = (matches.size - 1).coerceAtLeast(0) }
+    val focusId = matches.getOrNull(matchIndex.coerceIn(0, (matches.size - 1).coerceAtLeast(0)))
 
     Scaffold(
         contentWindowInsets = WindowInsets(0),
@@ -262,7 +300,7 @@ fun ChatScreen(
                     query = vm.searchQuery,
                     onQuery = { vm.searchQuery = it },
                     count = matches.size,
-                    index = matchIndex,
+                    index = matchIndex.coerceIn(0, (matches.size - 1).coerceAtLeast(0)),
                     onPrev = { if (matches.isNotEmpty()) matchIndex = (matchIndex - 1 + matches.size) % matches.size },
                     onNext = { if (matches.isNotEmpty()) matchIndex = (matchIndex + 1) % matches.size },
                     onClose = vm::closeSearch,
@@ -273,7 +311,7 @@ fun ChatScreen(
                         IconButton(onClick = onOpenDrawer) { Icon(Icons.Default.Menu, contentDescription = "Menü") }
                     },
                     title = {
-                        Column(modifier = Modifier.clickableNoRipple { showModelPicker = true }) {
+                        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
                             Text(
                                 chat?.title ?: "Yeni sohbet",
                                 style = MaterialTheme.typography.titleMedium,
@@ -281,13 +319,29 @@ fun ChatScreen(
                                 overflow = TextOverflow.Ellipsis,
                             )
                             val personaLabel = chat?.persona?.takeIf { it.isNotBlank() } ?: pendingPersona?.label
-                            Text(
-                                (if (personaLabel != null) "$personaLabel · " else "") + activeModel.substringAfter('/') + "  ▾",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.primary,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
+                            // Model hapı: dokununca model seçici açılır.
+                            Surface(
+                                shape = CircleShape,
+                                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                modifier = Modifier.clip(CircleShape).clickable { pickerMode = PickerMode.SELECT },
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                ) {
+                                    ProviderDot(activeRef.provider, 7.dp)
+                                    Text(
+                                        (if (personaLabel != null) "$personaLabel · " else "") + activeRef.display,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f, fill = false),
+                                    )
+                                    Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Model seç", modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
                         }
                     },
                     actions = {
@@ -328,7 +382,7 @@ fun ChatScreen(
                 when {
                     !ready -> Unit
                     messages.isEmpty() -> EmptyState(
-                        hasKey = settings.apiKey.isNotBlank(),
+                        hasKey = settings.configuredProviders.isNotEmpty(),
                         onOpenSettings = onOpenSettings,
                         onSuggestion = { vm.input = it },
                         memoryOn = settings.memoryEnabled,
@@ -348,7 +402,8 @@ fun ChatScreen(
                         vm = vm,
                         onEdit = { id, text -> editing = id to text },
                         onShare = ::share,
-                        onPickModel = { showModelPicker = true },
+                        onPickModel = { pickerMode = PickerMode.SELECT },
+                        onCompare = { pickerMode = PickerMode.COMPARE },
                         onDeleteMessage = { deletingMessage = it },
                     )
                 }
@@ -357,9 +412,9 @@ fun ChatScreen(
                 vm = vm,
                 templates = templates.map { it.title to it.text },
                 generating = isGenerating,
-                activeModelName = activeModel.substringAfter('/'),
+                activeModelName = activeRef.display,
                 visionSuggestion = visionSuggestion,
-                onSwitchModel = { vm.selectModel(it) },
+                onSwitchModel = { vm.selectModel(ModelRef(activeRef.provider, it)) },
                 onGallery = { pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                 onCamera = ::launchCamera,
                 onFile = { pickFiles.launch(arrayOf("*/*")) },
@@ -369,17 +424,20 @@ fun ChatScreen(
         }
     }
 
-    if (showModelPicker) {
+    pickerMode?.let { mode ->
         ModelPickerSheet(
-            current = activeModel,
+            current = activeRef,
             state = modelsState,
-            favorites = settings.favoriteModels,
-            unavailable = settings.unavailableModels,
-            describe = describe,
-            onSelect = { vm.selectModel(it); showModelPicker = false },
+            settings = settings,
+            title = if (mode == PickerMode.COMPARE) "Hangi modelle yanıtlansın?" else "Model seç",
+            onSelect = { ref ->
+                if (mode == PickerMode.COMPARE) vm.regenerateWith(ref) else vm.selectModel(ref)
+                pickerMode = null
+            },
             onToggleFavorite = vm::toggleFavorite,
             onRefresh = vm::refreshModels,
-            onDismiss = { showModelPicker = false },
+            onAddProvider = { pickerMode = null; onOpenSettings() },
+            onDismiss = { pickerMode = null },
         )
     }
     if (showRename) {
@@ -461,6 +519,7 @@ private fun SearchBar(
     )
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun MessageList(
     messages: List<MessageEntity>,
@@ -474,12 +533,15 @@ private fun MessageList(
     onEdit: (Long, String) -> Unit,
     onShare: (String) -> Unit,
     onPickModel: () -> Unit,
+    onCompare: () -> Unit,
     onDeleteMessage: (Long) -> Unit,
 ) {
     val reversed = remember(messages) { messages.asReversed() }
     val listState = rememberLazyListState()
     val atBottom by remember { derivedStateOf { listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset < 80 } }
     val scope = rememberCoroutineScope()
+    // Son mesaj kullanıcınınsa (yanıt silinmiş ya da hiç gelmemişse) yanıt istemek için bir düğme gösterilir.
+    val awaitingReply = !isGenerating && messages.lastOrNull()?.role == ROLE_USER
 
     // Yeni mesaj eklenince (gönderme / yanıt başlangıcı) en alta in.
     LaunchedEffect(messages.size) {
@@ -488,7 +550,7 @@ private fun MessageList(
     // Arama sonucuna git.
     LaunchedEffect(focusId) {
         val idx = reversed.indexOfFirst { it.id == focusId }
-        if (idx >= 0) listState.animateScrollToItem(idx)
+        if (idx >= 0) listState.animateScrollToItem(idx + if (awaitingReply) 1 else 0)
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -497,8 +559,19 @@ private fun MessageList(
             reverseLayout = true,
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+            verticalArrangement = Arrangement.spacedBy(18.dp),
         ) {
+            if (awaitingReply) {
+                item(key = "reply") {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                        AssistChip(
+                            onClick = vm::regenerate,
+                            label = { Text("Yanıt al") },
+                            leadingIcon = { Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                        )
+                    }
+                }
+            }
             items(reversed, key = { it.id }) { m ->
                 val isLast = m.id == messages.last().id
                 val tint = when {
@@ -506,7 +579,7 @@ private fun MessageList(
                     m.id in matches -> MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.4f)
                     else -> Color.Transparent
                 }
-                Box(modifier = Modifier.fillMaxWidth().background(tint, RoundedCornerShape(12.dp))) {
+                Box(modifier = Modifier.fillMaxWidth().animateItem().background(tint, RoundedCornerShape(12.dp))) {
                     if (m.role == ROLE_USER) {
                         UserMessage(
                             m,
@@ -523,6 +596,7 @@ private fun MessageList(
                             preparingSpeech = preparingSpeech,
                             canEdit = !isGenerating,
                             onRegenerate = vm::regenerate,
+                            onRegenerateWith = onCompare,
                             onShare = onShare,
                             onPickModel = onPickModel,
                             onSpeak = { vm.toggleSpeak(m.id, it) },
@@ -537,13 +611,20 @@ private fun MessageList(
         if (!atBottom) {
             SmallFloatingActionButton(
                 onClick = { scope.launch { listState.animateScrollToItem(0) } },
+                containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
                 modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp),
             ) { Icon(Icons.Default.ArrowDownward, contentDescription = "En alta git") }
         }
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
+private fun greeting(hour: Int = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)) = when (hour) {
+    in 5..11 -> "Günaydın"
+    in 12..17 -> "İyi günler"
+    in 18..22 -> "İyi akşamlar"
+    else -> "İyi geceler"
+}
+
 @Composable
 private fun EmptyState(
     hasKey: Boolean,
@@ -556,44 +637,66 @@ private fun EmptyState(
     onManagePersonas: () -> Unit,
 ) {
     Column(
-        modifier = Modifier.fillMaxSize().padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 24.dp),
         verticalArrangement = Arrangement.Center,
     ) {
-        Text("Merhaba 👋", style = MaterialTheme.typography.headlineLarge)
+        KutuLogo(60.dp)
+        Spacer(Modifier.height(20.dp))
+        Text(greeting(), style = MaterialTheme.typography.headlineLarge)
         Text(
-            "NVIDIA Build modelleriyle sohbet et. Sohbetlerini ve hakkında öğrendiklerimi hatırlarım.",
-            style = MaterialTheme.typography.bodyLarge,
-            textAlign = TextAlign.Center,
+            "Bugün ne yapalım?",
+            style = MaterialTheme.typography.headlineSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 8.dp, bottom = 24.dp),
         )
+        Spacer(Modifier.height(24.dp))
         if (!hasKey) {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Başlamak için API anahtarı gerekli", style = MaterialTheme.typography.titleMedium)
+            Card(modifier = Modifier.fillMaxWidth(), shape = MaterialTheme.shapes.large) {
+                Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Başlamak için bir sağlayıcı ekleyin", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "build.nvidia.com adresinden ücretsiz bir API anahtarı (nvapi-…) oluşturup Ayarlar'a yapıştırın.",
+                        "NVIDIA Build, OpenRouter, Groq, Gemini, OpenAI ve diğerlerinden birinin API anahtarını Ayarlar'a yapıştırın. " +
+                            "Birçoğunun ücretsiz katmanı var.",
                         style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    Button(onClick = onOpenSettings) { Text("Ayarlar'ı aç") }
+                    Button(onClick = onOpenSettings) { Text("Sağlayıcı ekle") }
                 }
             }
         } else {
-            Text("Kişilik seç", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
-                modifier = Modifier.padding(top = 8.dp, bottom = 16.dp),
+            // Öneri kartları (2 sütun)
+            SUGGESTIONS.chunked(2).forEach { row ->
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp)) {
+                    row.forEach { s ->
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceContainer,
+                            shape = MaterialTheme.shapes.large,
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                            modifier = Modifier.weight(1f).clip(MaterialTheme.shapes.large).clickable { onSuggestion(s.prompt) },
+                        ) {
+                            Column(modifier = Modifier.padding(14.dp).heightIn(min = 76.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Icon(s.icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
+                                Text(s.title, style = MaterialTheme.typography.titleSmall)
+                                Text(
+                                    s.prompt.trim().trimEnd(':'),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 2, overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            Text("Kişilik", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()).padding(top = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 personas.forEach { p ->
                     FilterChip(selected = p == selected, onClick = { onPersona(p) }, label = { Text(p.label) })
                 }
                 FilterChip(selected = false, onClick = onManagePersonas, label = { Text("＋ Yeni") })
-            }
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                SUGGESTIONS.forEach { s ->
-                    androidx.compose.material3.AssistChip(onClick = { onSuggestion(s) }, label = { Text(s) })
-                }
             }
             if (!memoryOn) {
                 Text(
@@ -625,81 +728,97 @@ private fun InputBar(
     var templateMenu by remember { mutableStateOf(false) }
     val canSend = vm.input.isNotBlank() || vm.pending.isNotEmpty()
 
-    Surface(tonalElevation = 2.dp, modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            vm.attachError?.let {
-                Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+    Column(modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        vm.attachError?.let {
+            Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 8.dp))
+        }
+        if (visionSuggestion != null) {
+            Surface(color = MaterialTheme.colorScheme.tertiaryContainer, shape = MaterialTheme.shapes.medium) {
+                Row(modifier = Modifier.padding(start = 14.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "👁 $activeModelName görselleri anlamayabilir.",
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = { onSwitchModel(visionSuggestion.id) }) { Text(visionSuggestion.display + " ile dene") }
+                }
             }
-            if (visionSuggestion != null) {
-                Surface(color = MaterialTheme.colorScheme.tertiaryContainer, shape = RoundedCornerShape(12.dp)) {
-                    Row(modifier = Modifier.padding(start = 12.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            "👁 $activeModelName görselleri anlamayabilir.",
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.weight(1f),
-                        )
-                        androidx.compose.material3.TextButton(onClick = { onSwitchModel(visionSuggestion.id) }) {
-                            Text(visionSuggestion.display + " ile dene")
+        }
+        // Yüzen giriş kutusu
+        Surface(
+            shape = MaterialTheme.shapes.extraLarge,
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            shadowElevation = 3.dp,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column {
+                if (vm.pending.isNotEmpty() || vm.attaching) {
+                    Row(
+                        modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        AttachmentStrip(vm.pending.toList(), onRemove = vm::removePending)
+                        if (vm.attaching) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                    }
+                }
+                Row(modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp), verticalAlignment = Alignment.Bottom) {
+                    Box {
+                        IconButton(onClick = { attachMenu = true }) { Icon(Icons.Default.Add, contentDescription = "Ek ekle") }
+                        DropdownMenu(expanded = attachMenu, onDismissRequest = { attachMenu = false }) {
+                            DropdownMenuItem(text = { Text("Galeriden resim") }, leadingIcon = { Icon(Icons.Default.Image, null) },
+                                onClick = { attachMenu = false; onGallery() })
+                            DropdownMenuItem(text = { Text("Fotoğraf çek") }, leadingIcon = { Icon(Icons.Default.PhotoCamera, null) },
+                                onClick = { attachMenu = false; onCamera() })
+                            DropdownMenuItem(text = { Text("Belge (PDF, Excel, Word, metin…)") }, leadingIcon = { Icon(Icons.Default.Description, null) },
+                                onClick = { attachMenu = false; onFile() })
                         }
                     }
-                }
-            }
-            if (vm.pending.isNotEmpty() || vm.attaching) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    AttachmentStrip(vm.pending.toList(), onRemove = vm::removePending)
-                    if (vm.attaching) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                }
-            }
-            Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                Box {
-                    IconButton(onClick = { attachMenu = true }) { Icon(Icons.Default.Add, contentDescription = "Ek ekle") }
-                    DropdownMenu(expanded = attachMenu, onDismissRequest = { attachMenu = false }) {
-                        DropdownMenuItem(text = { Text("Galeriden resim") }, leadingIcon = { Icon(Icons.Default.Image, null) },
-                            onClick = { attachMenu = false; onGallery() })
-                        DropdownMenuItem(text = { Text("Fotoğraf çek") }, leadingIcon = { Icon(Icons.Default.PhotoCamera, null) },
-                            onClick = { attachMenu = false; onCamera() })
-                        DropdownMenuItem(text = { Text("Belge (PDF, Excel, Word, metin…)") }, leadingIcon = { Icon(Icons.Default.Description, null) },
-                            onClick = { attachMenu = false; onFile() })
-                    }
-                }
-                Box {
-                    IconButton(onClick = { templateMenu = true }) { Icon(Icons.Default.AutoAwesome, contentDescription = "Şablonlar") }
-                    DropdownMenu(expanded = templateMenu, onDismissRequest = { templateMenu = false }) {
-                        templates.forEach { (title, text) ->
-                            DropdownMenuItem(text = { Text(title) }, onClick = { templateMenu = false; vm.insertTemplate(text) })
+                    Box {
+                        IconButton(onClick = { templateMenu = true }) { Icon(Icons.Default.AutoAwesome, contentDescription = "Şablonlar", tint = MaterialTheme.colorScheme.primary) }
+                        DropdownMenu(expanded = templateMenu, onDismissRequest = { templateMenu = false }) {
+                            templates.forEach { (title, text) ->
+                                DropdownMenuItem(text = { Text(title) }, onClick = { templateMenu = false; vm.insertTemplate(text) })
+                            }
                         }
                     }
-                }
-                TextField(
-                    value = vm.input,
-                    onValueChange = { vm.input = it },
-                    placeholder = { Text("Mesaj yaz…") },
-                    maxLines = 8,
-                    shape = RoundedCornerShape(24.dp),
-                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
-                    colors = TextFieldDefaults.colors(
-                        focusedIndicatorColor = Color.Transparent,
-                        unfocusedIndicatorColor = Color.Transparent,
-                        disabledIndicatorColor = Color.Transparent,
-                    ),
-                    modifier = Modifier.weight(1f),
-                )
-                when {
-                    generating -> FilledIconButton(onClick = vm::stop) { Icon(Icons.Default.Stop, contentDescription = "Durdur") }
-                    canSend -> FilledIconButton(onClick = onSend, enabled = !vm.attaching) {
-                        Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Gönder")
+                    TextField(
+                        value = vm.input,
+                        onValueChange = { vm.input = it },
+                        placeholder = { Text("Mesaj yaz…") },
+                        maxLines = 8,
+                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+                        colors = TextFieldDefaults.colors(
+                            focusedContainerColor = Color.Transparent,
+                            unfocusedContainerColor = Color.Transparent,
+                            disabledContainerColor = Color.Transparent,
+                            focusedIndicatorColor = Color.Transparent,
+                            unfocusedIndicatorColor = Color.Transparent,
+                            disabledIndicatorColor = Color.Transparent,
+                        ),
+                        modifier = Modifier.weight(1f),
+                    )
+                    Box(modifier = Modifier.padding(end = 4.dp, bottom = 4.dp)) {
+                        when {
+                            generating -> RoundAction(Icons.Default.Stop, "Durdur", MaterialTheme.colorScheme.errorContainer, MaterialTheme.colorScheme.onErrorContainer, onClick = vm::stop)
+                            canSend -> Box(
+                                modifier = Modifier.size(44.dp).clip(CircleShape).background(KutuBrand.gradient)
+                                    .clickable(enabled = !vm.attaching, onClick = onSend),
+                                contentAlignment = Alignment.Center,
+                            ) { Icon(Icons.Default.ArrowUpward, contentDescription = "Gönder", tint = Color.White) }
+                            else -> RoundAction(Icons.Default.Mic, "Sesle yaz", MaterialTheme.colorScheme.surfaceContainerHighest, MaterialTheme.colorScheme.onSurface, onClick = onMic)
+                        }
                     }
-                    else -> FilledIconButton(onClick = onMic) { Icon(Icons.Default.Mic, contentDescription = "Sesle yaz") }
                 }
             }
         }
     }
 }
 
-private fun Modifier.clickableNoRipple(onClick: () -> Unit): Modifier = composed {
-    clickable(
-        interactionSource = remember { MutableInteractionSource() },
-        indication = null,
-        onClick = onClick,
-    )
+@Composable
+private fun RoundAction(icon: ImageVector, description: String, container: Color, content: Color, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier.size(44.dp).clip(CircleShape).background(container).clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) { Icon(icon, contentDescription = description, tint = content) }
 }

@@ -45,6 +45,7 @@ data class BackupChat(
     val createdAt: Long,
     val updatedAt: Long,
     val messages: List<BackupMessage>,
+    val provider: String = "nvidia",
 )
 
 @Serializable
@@ -59,6 +60,8 @@ data class BackupMessage(
     val attachments: String = "",
     val versions: String = "",
     val activeVersion: Int = 0,
+    val durationMs: Long = 0,
+    val firstTokenMs: Long = 0,
 )
 
 @Serializable data class BackupMemory(val content: String, val enabled: Boolean, val createdAt: Long)
@@ -101,8 +104,9 @@ class BackupManager(
                 summary = chat.summary, summarizedUpToIndex = msgs.indexOfLast { it.id <= chat.summarizedUpTo && chat.summary.isNotEmpty() },
                 pinned = chat.pinned, persona = chat.persona, createdAt = chat.createdAt, updatedAt = chat.updatedAt,
                 messages = msgs.map {
-                    BackupMessage(it.role, it.content, it.reasoning, it.model, it.status, it.error, it.createdAt, it.attachments, it.versions, it.activeVersion)
+                    BackupMessage(it.role, it.content, it.reasoning, it.model, it.status, it.error, it.createdAt, it.attachments, it.versions, it.activeVersion, it.durationMs, it.firstTokenMs)
                 },
+                provider = chat.provider,
             )
         }
         val file = BackupFile(
@@ -156,7 +160,7 @@ class BackupManager(
                 ChatEntity(
                     title = c.title, titleLocked = c.titleLocked, model = c.model, systemPrompt = c.systemPrompt,
                     summary = c.summary, summarizedUpTo = 0, pinned = c.pinned, createdAt = c.createdAt,
-                    updatedAt = c.updatedAt, persona = c.persona,
+                    updatedAt = c.updatedAt, persona = c.persona, provider = c.provider,
                 ),
             )
             val ids = c.messages.map {
@@ -165,6 +169,7 @@ class BackupManager(
                         chatId = chatId, role = it.role, content = it.content, reasoning = it.reasoning, model = it.model,
                         status = if (it.status == 1) 0 else it.status, error = it.error, createdAt = it.createdAt,
                         attachments = it.attachments, versions = it.versions, activeVersion = it.activeVersion,
+                        durationMs = it.durationMs, firstTokenMs = it.firstTokenMs,
                     ),
                 )
             }

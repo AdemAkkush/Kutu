@@ -71,9 +71,9 @@ object Capabilities {
     }
 
     private val ID_RULES: List<Pair<Cap, Regex>> = listOf(
-        Cap.VISION to Regex("vision|-vl\\b|-vl-|vila|neva|fuyu|kosmos|deplot|llava|pixtral|paligemma|omni|cosmos-reason|gemma-[34]"),
-        Cap.CODE to Regex("code|coder|starcoder|codestral|codellama"),
-        Cap.REASONING to Regex("reason|think|\\br1\\b|-r1-|qwq|gpt-oss|nemotron-3"),
+        Cap.VISION to Regex("vision|-vl\\b|-vl-|vila|neva|fuyu|kosmos|deplot|llava|pixtral|paligemma|omni|cosmos-reason|gemma-[34]|gpt-4o|gpt-4\\.1|gpt-5|claude|gemini|grok-[4-9]|qwen.*vl|llama-4"),
+        Cap.CODE to Regex("code|coder|starcoder|codestral|codellama|devstral"),
+        Cap.REASONING to Regex("reason|think|\\br1\\b|-r1-|qwq|gpt-oss|nemotron-3|\\bo[134]\\b|o[134]-|gpt-5|magistral"),
         Cap.TRANSLATE to Regex("translate"),
         Cap.DOCUMENT to Regex("parse|ocr"),
         Cap.FAST to Regex("flash|nano|lightning|bolt|mini\\b|small|-xs-|e4b|-2b|-3b|-4b|-7b|-8b"),
@@ -106,6 +106,8 @@ object Capabilities {
         catalog: Map<String, CatalogEntry>,
         visionConfirmed: Set<String> = emptySet(),
         visionRejected: Set<String> = emptySet(),
+        /** Öğrenilmiş kümelerdeki anahtar (NVIDIA dışı sağlayıcılarda "sağlayıcı:model"). */
+        key: String = id,
     ): ModelMeta {
         val entry = lookup(id, catalog)
         val labelCaps = entry?.let { fromLabels(it.labels) }.orEmpty()
@@ -117,12 +119,12 @@ object Capabilities {
         else caps += idCaps.filter { it == Cap.FAST || it == Cap.CODE || it == Cap.VISION }   // etiketi eksik ama adı belli olanlar
         if (id in VERIFIED_VISION) caps += Cap.VISION
         if (id in VERIFIED_NO_VISION) caps -= Cap.VISION
-        if (id in visionConfirmed) caps += Cap.VISION
-        if (id in visionRejected) caps -= Cap.VISION
+        if (key in visionConfirmed) caps += Cap.VISION
+        if (key in visionRejected) caps -= Cap.VISION
         if (Cap.SAFETY !in caps && Cap.EMBED !in caps && Cap.CHAT !in caps) caps += Cap.CHAT
         return ModelMeta(
             id = id,
-            display = entry?.display?.takeIf { it.isNotBlank() } ?: id.substringAfter('/'),
+            display = entry?.display?.takeIf { it.isNotBlank() } ?: id.substringAfterLast('/'),
             caps = caps,
             inCatalog = if (catalog.isEmpty()) null else entry != null,
             deprecation = entry?.deprecation?.takeIf { it.isNotBlank() }?.let { runCatching { LocalDate.parse(it) }.getOrNull() },

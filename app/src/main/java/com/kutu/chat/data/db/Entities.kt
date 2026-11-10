@@ -33,6 +33,8 @@ data class ChatEntity(
     val updatedAt: Long,
     /** Sohbet bir kişiyle başlatıldıysa görünen adı (örn. "💻 Kod asistanı"). */
     @ColumnInfo(defaultValue = "''") val persona: String = "",
+    /** Modelin sağlayıcısı (bkz. [com.kutu.chat.domain.Providers]). */
+    @ColumnInfo(defaultValue = "'nvidia'") val provider: String = "nvidia",
 )
 
 @Entity(
@@ -62,6 +64,9 @@ data class MessageEntity(
     /** Yanıt sürümleri (yeniden üretimler) JSON listesi; boşsa tek sürüm. */
     @ColumnInfo(defaultValue = "''") val versions: String = "",
     @ColumnInfo(defaultValue = "0") val activeVersion: Int = 0,
+    /** Yanıtın toplam üretim süresi ve ilk parçanın gelme süresi (ms); 0 = bilinmiyor. */
+    @ColumnInfo(defaultValue = "0") val durationMs: Long = 0,
+    @ColumnInfo(defaultValue = "0") val firstTokenMs: Long = 0,
 )
 
 /** Tüm sohbetlerde geçerli uzun süreli hafıza kaydı. */

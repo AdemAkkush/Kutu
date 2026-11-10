@@ -40,6 +40,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kutu.chat.data.DocumentExtractor
+import com.kutu.chat.ui.theme.LocalCodeColors
 
 @Composable
 fun MarkdownView(
@@ -115,24 +116,24 @@ fun MarkdownView(
 @Composable
 fun CodeBlock(lang: String, code: String, modifier: Modifier = Modifier) {
     val clipboard = LocalClipboardManager.current
+    val colors = LocalCodeColors.current
     var copied by remember { mutableStateOf(false) }
+    val highlighted = remember(code, lang, colors) { highlightCode(code, lang, colors) }
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh),
+            .clip(RoundedCornerShape(14.dp))
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(14.dp))
+            .background(colors.background),
     ) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(MaterialTheme.colorScheme.surfaceContainerHighest)
-                .padding(start = 12.dp),
+            modifier = Modifier.fillMaxWidth().background(colors.header).padding(start = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
                 text = lang.ifBlank { "kod" },
                 style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = colors.comment,
                 modifier = Modifier.weight(1f),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -144,20 +145,19 @@ fun CodeBlock(lang: String, code: String, modifier: Modifier = Modifier) {
                 Icon(
                     imageVector = if (copied) Icons.Default.Check else Icons.Default.ContentCopy,
                     contentDescription = "Kodu kopyala",
+                    tint = if (copied) MaterialTheme.colorScheme.primary else colors.comment,
                     modifier = Modifier.width(18.dp),
                 )
             }
         }
         Text(
-            text = code,
+            text = highlighted,
             fontFamily = FontFamily.Monospace,
             fontSize = 13.sp,
-            lineHeight = 19.sp,
-            color = MaterialTheme.colorScheme.onSurface,
+            lineHeight = 20.sp,
+            color = colors.text,
             softWrap = false,
-            modifier = Modifier
-                .horizontalScroll(rememberScrollState())
-                .padding(12.dp),
+            modifier = Modifier.horizontalScroll(rememberScrollState()).padding(14.dp),
         )
     }
 }

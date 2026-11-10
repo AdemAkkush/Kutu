@@ -5,6 +5,21 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.filled.Hub
+import androidx.compose.material.icons.filled.SmartToy
+import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Notes
+import androidx.compose.material.icons.filled.RecordVoiceOver
+import androidx.compose.material.icons.filled.BatterySaver
+import androidx.compose.material.icons.filled.Backup
+import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material3.Surface
+import androidx.compose.ui.draw.clip
+import com.kutu.chat.domain.Providers
+import com.kutu.chat.ui.components.ProviderDot
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -73,10 +88,9 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit, onOpenMemory: () -
     val modelsState by vm.modelsState.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
-    var showKey by remember { mutableStateOf(false) }
     var picker by remember { mutableStateOf<PickerTarget?>(null) }
     var systemPrompt by remember(settings.systemPrompt) { mutableStateOf(settings.systemPrompt) }
-    var tested by remember { mutableStateOf(false) }
+    var editingProvider by remember { mutableStateOf<String?>(null) }
     val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
         if (uri != null) vm.exportBackup(uri)
     }
@@ -98,291 +112,378 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit, onOpenMemory: () -
                 .padding(inner)
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            Section("NVIDIA Build bağlantısı")
-            OutlinedTextField(
-                value = settings.apiKey,
-                onValueChange = { v -> vm.update { it.copy(apiKey = v.trim()) } },
-                label = { Text("API anahtarı (nvapi-…)") },
-                singleLine = true,
-                visualTransformation = if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                trailingIcon = {
-                    IconButton(onClick = { showKey = !showKey }) {
-                        Icon(if (showKey) Icons.Default.VisibilityOff else Icons.Default.Visibility, contentDescription = "Göster/gizle")
+            SettingsCard("Sağlayıcılar", Icons.Default.Hub) {
+                Text(
+                    "Kutu, sohbet API'si OpenAI biçimiyle uyumlu sağlayıcılarla çalışır. Kullanmak istediklerinize API anahtarı ekleyin; " +
+                        "model seçicide sağlayıcılar arasında geçiş yapabilirsiniz. Anahtarlar cihazda şifreli saklanır.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Providers.presets.forEach { def ->
+                    val connected = def.id in settings.configuredProviders
+                    val count = modelsState.modelsOf(def.id).size
+                    Row(
+                        modifier = Modifier.fillMaxWidth().clip(MaterialTheme.shapes.medium).clickable { editingProvider = def.id }.padding(vertical = 8.dp, horizontal = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        ProviderDot(def.id, 12.dp)
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(def.name, style = MaterialTheme.typography.bodyLarge)
+                            Text(
+                                when {
+                                    def.id in modelsState.loadingProviders -> "Bağlanıyor…"
+                                    modelsState.errors[def.id] != null && connected -> "Hata: bağlantıyı sınayın"
+                                    connected && count > 0 -> "Bağlı · $count model"
+                                    connected -> "Anahtar girildi"
+                                    else -> def.note
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (connected && modelsState.errors[def.id] == null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 2,
+                            )
+                        }
+                        Text(if (connected) "Düzenle" else "Ekle", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
                     }
-                },
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = {
-                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://build.nvidia.com/settings/api-keys")))
-                }) { Text("Anahtar al") }
-                Button(onClick = { tested = true; vm.refreshModels() }, enabled = settings.apiKey.isNotBlank() && !modelsState.loading) {
-                    Text(if (modelsState.loading) "Sınanıyor…" else "Bağlantıyı sına")
                 }
             }
-            if (tested && !modelsState.loading) {
-                if (modelsState.error != null) {
-                    Text(modelsState.error!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                } else {
-                    Text("Bağlantı başarılı: ${modelsState.models.size} model bulundu.", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodyMedium)
+            SettingsCard("Modeller", Icons.Default.SmartToy) {
+                ModelField("Varsayılan sohbet modeli", Providers.name(settings.defaultProvider) + " · " + settings.defaultModel) { picker = PickerTarget.DEFAULT }
+                ModelField("Arka plan modeli (başlık, özet, hafıza)", Providers.name(settings.memoryProvider) + " · " + settings.memoryModel) { picker = PickerTarget.BACKGROUND }
+                Text(
+                    "Çalışmayan modeller (kaldırılmış ya da hata veren) model seçicide gösterilmez.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (settings.unavailableModels.isNotEmpty()) {
+                    OutlinedButton(onClick = { vm.update { it.copy(unavailableModels = emptySet()) } }) {
+                        Text("Hata nedeniyle gizlenen ${settings.unavailableModels.size} modeli yeniden göster")
+                    }
                 }
+                Text(
+                    "Arka plan işleri için küçük ve hızlı bir model seçmek hem hızlı hem ucuzdur. Bu model kullanılamazsa sohbetin kendi modeli kullanılır.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
-            OutlinedTextField(
-                value = settings.baseUrl,
-                onValueChange = { v -> vm.update { it.copy(baseUrl = v.trim()) } },
-                label = { Text("API adresi") },
-                singleLine = true,
-                supportingText = { Text("Varsayılan: $DEFAULT_BASE_URL") },
-                modifier = Modifier.fillMaxWidth(),
-            )
-
-            HorizontalDivider()
-            Section("Modeller")
-            ModelField("Varsayılan sohbet modeli", settings.defaultModel) { picker = PickerTarget.DEFAULT }
-            ModelField("Arka plan modeli (başlık, özet, hafıza)", settings.memoryModel) { picker = PickerTarget.BACKGROUND }
-            Text(
-                "Çalışmayan modeller (kaldırılmış ya da hata veren) model seçicide gösterilmez.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            if (settings.unavailableModels.isNotEmpty()) {
-                OutlinedButton(onClick = { vm.update { it.copy(unavailableModels = emptySet()) } }) {
-                    Text("Hata nedeniyle gizlenen ${settings.unavailableModels.size} modeli yeniden göster")
+            SettingsCard("Hafıza", Icons.Default.Psychology) {
+                ToggleRow("Hafızayı sohbetlerde kullan", settings.memoryEnabled) { v -> vm.update { it.copy(memoryEnabled = v) } }
+                ToggleRow("Sohbetlerden otomatik öğren", settings.autoMemory, enabled = settings.memoryEnabled) { v -> vm.update { it.copy(autoMemory = v) } }
+                OutlinedButton(onClick = onOpenMemory) { Text("Kayıtlı hafızayı yönet") }
+            }
+            SettingsCard("Üretim", Icons.Default.Tune) {
+                LabeledSlider("Yaratıcılık (temperature)", "%.1f".format(settings.temperature), settings.temperature, 0f..1.5f, 14) { v ->
+                    vm.update { it.copy(temperature = (v * 10).roundToInt() / 10f) }
                 }
-            }
-            Text(
-                "Arka plan işleri için küçük ve hızlı bir model seçmek hem hızlı hem ucuzdur.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-
-            HorizontalDivider()
-            Section("Hafıza")
-            ToggleRow("Hafızayı sohbetlerde kullan", settings.memoryEnabled) { v -> vm.update { it.copy(memoryEnabled = v) } }
-            ToggleRow("Sohbetlerden otomatik öğren", settings.autoMemory, enabled = settings.memoryEnabled) { v -> vm.update { it.copy(autoMemory = v) } }
-            OutlinedButton(onClick = onOpenMemory) { Text("Kayıtlı hafızayı yönet") }
-
-            HorizontalDivider()
-            Section("Üretim")
-            LabeledSlider("Yaratıcılık (temperature)", "%.1f".format(settings.temperature), settings.temperature, 0f..1.5f, 14) { v ->
-                vm.update { it.copy(temperature = (v * 10).roundToInt() / 10f) }
-            }
-            LabeledSlider("Maksimum yanıt uzunluğu", "${settings.maxTokens} token", settings.maxTokens.toFloat(), 512f..16384f, 30) { v ->
-                vm.update { it.copy(maxTokens = (v / 256).roundToInt() * 256) }
-            }
-            LabeledSlider("Bağlam bütçesi", "${settings.contextTokens} token", settings.contextTokens.toFloat(), 4000f..100000f, 23) { v ->
-                vm.update { it.copy(contextTokens = (v / 1000).roundToInt() * 1000) }
-            }
-            Text(
-                "Sohbet bu bütçeyi aşınca eski mesajlar otomatik özetlenir; sohbet sınırsız devam eder.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-
-            HorizontalDivider()
-            Section("Sistem istemi")
-            OutlinedTextField(
-                value = systemPrompt,
-                onValueChange = { systemPrompt = it; vm.update { s -> s.copy(systemPrompt = it) } },
-                minLines = 4,
-                maxLines = 10,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            TextButton(onClick = { vm.update { it.copy(systemPrompt = DEFAULT_SYSTEM_PROMPT) } }) { Text("Varsayılana döndür") }
-
-            HorizontalDivider()
-            Section("Seslendirme")
-            Text(
-                "Yanıtların altındaki hoparlör düğmesi yanıtı sesli okur. NVIDIA'nın yapay zekâ sesleri (Chatterbox, Magpie) " +
-                    "cihaz sesinden çok daha doğaldır. Hata olursa otomatik olarak cihaz sesine geçilir.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                val engines = listOf(TtsEngine.NVIDIA to "NVIDIA yapay zekâ", TtsEngine.DEVICE to "Cihaz sesi")
-                engines.forEachIndexed { index, (engine, label) ->
-                    SegmentedButton(
-                        selected = settings.ttsEngine == engine,
-                        onClick = { vm.update { it.copy(ttsEngine = engine) } },
-                        shape = SegmentedButtonDefaults.itemShape(index, engines.size),
-                    ) { Text(label) }
+                LabeledSlider("Maksimum yanıt uzunluğu", "${settings.maxTokens} token", settings.maxTokens.toFloat(), 512f..16384f, 30) { v ->
+                    vm.update { it.copy(maxTokens = (v / 256).roundToInt() * 256) }
                 }
+                LabeledSlider("Bağlam bütçesi", "${settings.contextTokens} token", settings.contextTokens.toFloat(), 4000f..100000f, 23) { v ->
+                    vm.update { it.copy(contextTokens = (v / 1000).roundToInt() * 1000) }
+                }
+                Text(
+                    "Sohbet bu bütçeyi aşınca eski mesajlar otomatik özetlenir; sohbet sınırsız devam eder.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
-            if (settings.ttsEngine == TtsEngine.NVIDIA) {
+            SettingsCard("Sistem istemi", Icons.Default.Notes) {
+                OutlinedTextField(
+                    value = systemPrompt,
+                    onValueChange = { systemPrompt = it; vm.update { s -> s.copy(systemPrompt = it) } },
+                    minLines = 4,
+                    maxLines = 10,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                TextButton(onClick = { vm.update { it.copy(systemPrompt = DEFAULT_SYSTEM_PROMPT) } }) { Text("Varsayılana döndür") }
+            }
+            SettingsCard("Seslendirme", Icons.Default.RecordVoiceOver) {
+                Text(
+                    "Yanıtların altındaki hoparlör düğmesi yanıtı sesli okur. NVIDIA'nın yapay zekâ sesleri (Chatterbox, Magpie) " +
+                        "cihaz sesinden çok daha doğaldır. Hata olursa otomatik olarak cihaz sesine geçilir.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                    val models = TtsModel.entries
-                    models.forEachIndexed { index, model ->
+                    val engines = listOf(TtsEngine.NVIDIA to "NVIDIA yapay zekâ", TtsEngine.DEVICE to "Cihaz sesi")
+                    engines.forEachIndexed { index, (engine, label) ->
                         SegmentedButton(
-                            selected = settings.ttsModel == model,
-                            onClick = { vm.update { it.copy(ttsModel = model) } },
-                            shape = SegmentedButtonDefaults.itemShape(index, models.size),
-                        ) { Text(model.label) }
+                            selected = settings.ttsEngine == engine,
+                            onClick = { vm.update { it.copy(ttsEngine = engine) } },
+                            shape = SegmentedButtonDefaults.itemShape(index, engines.size),
+                        ) { Text(label) }
                     }
                 }
-                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh)) {
-                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text("Hangi dilde kaç ses var?", style = MaterialTheme.typography.labelLarge)
-                        Text(
-                            "• Türkçe (Chatterbox): tek erkek ses; konuşmacı seçilemez, ses klonlama da kapalı.\n" +
-                                "• İngilizce, İspanyolca, Fransızca, Almanca, İtalyanca, Portekizce, Çince, Japonca, Korece, Arapça, Hintçe, Vietnamca (Magpie): " +
-                                "10 konuşmacı arasından seçilir.\n" +
-                                "• Türkçede farklı ses (örn. kadın sesi) istiyorsanız aşağıdaki “Türkçeyi cihaz sesiyle oku” seçeneğini açın.",
-                            style = MaterialTheme.typography.bodySmall,
-                        )
+                if (settings.ttsEngine == TtsEngine.NVIDIA) {
+                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                        val models = TtsModel.entries
+                        models.forEachIndexed { index, model ->
+                            SegmentedButton(
+                                selected = settings.ttsModel == model,
+                                onClick = { vm.update { it.copy(ttsModel = model) } },
+                                shape = SegmentedButtonDefaults.itemShape(index, models.size),
+                            ) { Text(model.label) }
+                        }
                     }
-                }
-                ToggleRow("Türkçeyi cihaz sesiyle oku (daha çok ses seçeneği)", settings.ttsTurkishOnDevice) { v -> vm.update { it.copy(ttsTurkishOnDevice = v) } }
-                if (settings.ttsModel != TtsModel.CHATTERBOX) {
-                    Text("Magpie konuşmacısı (Türkçe dışındaki diller için)", style = MaterialTheme.typography.labelLarge)
-                    Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        MAGPIE_SPEAKERS.forEach { name ->
-                            androidx.compose.material3.FilterChip(
-                                selected = settings.ttsVoice == name,
-                                onClick = { vm.update { it.copy(ttsVoice = name) } },
-                                label = { Text(name) },
+                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh)) {
+                        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text("Hangi dilde kaç ses var?", style = MaterialTheme.typography.labelLarge)
+                            Text(
+                                "• Türkçe (Chatterbox): tek erkek ses; konuşmacı seçilemez, ses klonlama da kapalı.\n" +
+                                    "• İngilizce, İspanyolca, Fransızca, Almanca, İtalyanca, Portekizce, Çince, Japonca, Korece, Arapça, Hintçe, Vietnamca (Magpie): " +
+                                    "10 konuşmacı arasından seçilir.\n" +
+                                    "• Türkçede farklı ses (örn. kadın sesi) istiyorsanız aşağıdaki “Türkçeyi cihaz sesiyle oku” seçeneğini açın.",
+                                style = MaterialTheme.typography.bodySmall,
                             )
                         }
                     }
-                }
-            }
-
-            LabeledSlider("Konuşma hızı", "%.2fx".format(settings.ttsSpeed), settings.ttsSpeed, VoiceProcessor.MIN_SPEED..VoiceProcessor.MAX_SPEED, 29) { v ->
-                vm.update { it.copy(ttsSpeed = (Math.round(v * 20) / 20f)) }
-            }
-            LabeledSlider("Ses tonu", if (settings.ttsPitch < 0.995f) "daha kalın" else if (settings.ttsPitch > 1.005f) "daha ince" else "normal", settings.ttsPitch, VoiceProcessor.MIN_PITCH..VoiceProcessor.MAX_PITCH, 13) { v ->
-                vm.update { it.copy(ttsPitch = (Math.round(v * 20) / 20f)) }
-            }
-            if (settings.ttsSpeed != 1f || settings.ttsPitch != 1f) {
-                TextButton(onClick = { vm.update { it.copy(ttsSpeed = 1f, ttsPitch = 1f) } }) { Text("Hız ve tonu sıfırla") }
-            }
-            Text(
-                "Hız ve ton, hangi motor seçili olursa olsun uygulanır. Hız değişince sesin tonu bozulmaz.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-
-            val usesDeviceVoice = settings.ttsEngine == TtsEngine.DEVICE || settings.ttsTurkishOnDevice
-            var showDeviceVoices by remember { mutableStateOf(false) }
-            if (usesDeviceVoice) {
-                OutlinedButton(onClick = { vm.loadDeviceVoices(); showDeviceVoices = true }, modifier = Modifier.fillMaxWidth()) {
-                    Column(modifier = Modifier.fillMaxWidth()) {
-                        Text("Cihaz sesi", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text(settings.ttsDeviceVoice.ifBlank { "Varsayılan (değiştirmek için dokunun)" }, style = MaterialTheme.typography.bodyMedium)
+                    ToggleRow("Türkçeyi cihaz sesiyle oku (daha çok ses seçeneği)", settings.ttsTurkishOnDevice) { v -> vm.update { it.copy(ttsTurkishOnDevice = v) } }
+                    if (settings.ttsModel != TtsModel.CHATTERBOX) {
+                        Text("Magpie konuşmacısı (Türkçe dışındaki diller için)", style = MaterialTheme.typography.labelLarge)
+                        Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            MAGPIE_SPEAKERS.forEach { name ->
+                                androidx.compose.material3.FilterChip(
+                                    selected = settings.ttsVoice == name,
+                                    onClick = { vm.update { it.copy(ttsVoice = name) } },
+                                    label = { Text(name) },
+                                )
+                            }
+                        }
                     }
                 }
-            }
-            if (showDeviceVoices) {
-                DeviceVoiceDialog(vm, settings.ttsDeviceVoice, onSelect = { name -> vm.update { it.copy(ttsDeviceVoice = name) } }, onDismiss = { vm.stopSpeaking(); showDeviceVoices = false })
-            }
 
-            val speaking by vm.speaking.collectAsStateWithLifecycle()
-            val preparing by vm.speakerPreparing.collectAsStateWithLifecycle()
-            val speakerError by vm.speakerError.collectAsStateWithLifecycle()
-            val canSpeak = settings.ttsEngine == TtsEngine.DEVICE || settings.apiKey.isNotBlank()
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Button(enabled = canSpeak, onClick = { vm.speakSample(-1, "Merhaba, ben Kutu. Bugün sana yardımcı olmak için buradayım.") }) {
-                    Text(if (speaking == -1L) (if (preparing) "Hazırlanıyor…" else "Durdur") else "Türkçe dene")
+                LabeledSlider("Konuşma hızı", "%.2fx".format(settings.ttsSpeed), settings.ttsSpeed, VoiceProcessor.MIN_SPEED..VoiceProcessor.MAX_SPEED, 29) { v ->
+                    vm.update { it.copy(ttsSpeed = (Math.round(v * 20) / 20f)) }
                 }
-                OutlinedButton(enabled = canSpeak, onClick = { vm.speakSample(-2, "Hello, I am Kutu. I am here to help you today.") }) {
-                    Text(if (speaking == -2L) (if (preparing) "Hazırlanıyor…" else "Durdur") else "İngilizce dene")
+                LabeledSlider("Ses tonu", if (settings.ttsPitch < 0.995f) "daha kalın" else if (settings.ttsPitch > 1.005f) "daha ince" else "normal", settings.ttsPitch, VoiceProcessor.MIN_PITCH..VoiceProcessor.MAX_PITCH, 13) { v ->
+                    vm.update { it.copy(ttsPitch = (Math.round(v * 20) / 20f)) }
                 }
-            }
-            speakerError?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+                if (settings.ttsSpeed != 1f || settings.ttsPitch != 1f) {
+                    TextButton(onClick = { vm.update { it.copy(ttsSpeed = 1f, ttsPitch = 1f) } }) { Text("Hız ve tonu sıfırla") }
+                }
+                Text(
+                    "Hız ve ton, hangi motor seçili olursa olsun uygulanır. Hız değişince sesin tonu bozulmaz.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
 
-            HorizontalDivider()
-            Section("Arka planda çalışma")
-            val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
-            var resumes by remember { mutableStateOf(0) }
-            androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
-                val observer = androidx.lifecycle.LifecycleEventObserver { _, event -> if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) resumes++ }
-                lifecycleOwner.lifecycle.addObserver(observer)
-                onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
-            }
-            val unrestricted = remember(resumes) {
-                (context.getSystemService(android.content.Context.POWER_SERVICE) as android.os.PowerManager).isIgnoringBatteryOptimizations(context.packageName)
-            }
-            Text(
-                "Yanıt hazırlanırken başka uygulamaya geçseniz de üretim bildirimli bir servisle sürer ve bağlantı koparsa otomatik yeniden denenir. " +
-                    "Bazı telefonlar (Xiaomi, Samsung, Huawei…) pil tasarrufu için uygulamayı yine de durdurabilir; öyleyse Kutu'yu pil kısıtlamasından muaf tutun.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
-                if (unrestricted) "Pil kısıtlaması: yok (önerilen)" else "Pil kısıtlaması: açık",
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (unrestricted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-            )
-            if (!unrestricted) {
-                OutlinedButton(onClick = {
-                    val intent = android.content.Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
-                    runCatching { context.startActivity(intent) }.onFailure {
-                        context.startActivity(
-                            android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
-                                .setData(Uri.parse("package:" + context.packageName)),
-                        )
+                val usesDeviceVoice = settings.ttsEngine == TtsEngine.DEVICE || settings.ttsTurkishOnDevice
+                var showDeviceVoices by remember { mutableStateOf(false) }
+                if (usesDeviceVoice) {
+                    OutlinedButton(onClick = { vm.loadDeviceVoices(); showDeviceVoices = true }, modifier = Modifier.fillMaxWidth()) {
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            Text("Cihaz sesi", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(settings.ttsDeviceVoice.ifBlank { "Varsayılan (değiştirmek için dokunun)" }, style = MaterialTheme.typography.bodyMedium)
+                        }
                     }
-                }) { Text("Pil ayarlarını aç") }
-            }
+                }
+                if (showDeviceVoices) {
+                    DeviceVoiceDialog(vm, settings.ttsDeviceVoice, onSelect = { name -> vm.update { it.copy(ttsDeviceVoice = name) } }, onDismiss = { vm.stopSpeaking(); showDeviceVoices = false })
+                }
 
-            HorizontalDivider()
-            Section("Yedekleme")
-            Text(
-                "Tüm sohbetleri, eklerini, hafızayı, kişilikleri ve şablonları tek bir ZIP dosyasına aktarın; " +
-                    "yeni telefonda içe aktarın. API anahtarı yedeğe dahil edilmez.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(enabled = !vm.backupBusy, onClick = {
-                    exportLauncher.launch("kutu-yedek-" + java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US).format(java.util.Date()) + ".zip")
-                }) { Text("Dışa aktar") }
-                OutlinedButton(enabled = !vm.backupBusy, onClick = { importLauncher.launch(arrayOf("application/zip", "application/octet-stream", "*/*")) }) {
-                    Text("İçe aktar")
+                val speaking by vm.speaking.collectAsStateWithLifecycle()
+                val preparing by vm.speakerPreparing.collectAsStateWithLifecycle()
+                val speakerError by vm.speakerError.collectAsStateWithLifecycle()
+                val canSpeak = settings.ttsEngine == TtsEngine.DEVICE || settings.apiKey.isNotBlank()
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Button(enabled = canSpeak, onClick = { vm.speakSample(-1, "Merhaba, ben Kutu. Bugün sana yardımcı olmak için buradayım.") }) {
+                        Text(if (speaking == -1L) (if (preparing) "Hazırlanıyor…" else "Durdur") else "Türkçe dene")
+                    }
+                    OutlinedButton(enabled = canSpeak, onClick = { vm.speakSample(-2, "Hello, I am Kutu. I am here to help you today.") }) {
+                        Text(if (speaking == -2L) (if (preparing) "Hazırlanıyor…" else "Durdur") else "İngilizce dene")
+                    }
+                }
+                speakerError?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+            }
+            SettingsCard("Arka planda çalışma", Icons.Default.BatterySaver) {
+                val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+                var resumes by remember { mutableStateOf(0) }
+                androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
+                    val observer = androidx.lifecycle.LifecycleEventObserver { _, event -> if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) resumes++ }
+                    lifecycleOwner.lifecycle.addObserver(observer)
+                    onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+                }
+                val unrestricted = remember(resumes) {
+                    (context.getSystemService(android.content.Context.POWER_SERVICE) as android.os.PowerManager).isIgnoringBatteryOptimizations(context.packageName)
+                }
+                Text(
+                    "Yanıt hazırlanırken başka uygulamaya geçseniz de üretim bildirimli bir servisle sürer ve bağlantı koparsa otomatik yeniden denenir. " +
+                        "Bazı telefonlar (Xiaomi, Samsung, Huawei…) pil tasarrufu için uygulamayı yine de durdurabilir; öyleyse Kutu'yu pil kısıtlamasından muaf tutun.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    if (unrestricted) "Pil kısıtlaması: yok (önerilen)" else "Pil kısıtlaması: açık",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (unrestricted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                )
+                if (!unrestricted) {
+                    OutlinedButton(onClick = {
+                        val intent = android.content.Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                        runCatching { context.startActivity(intent) }.onFailure {
+                            context.startActivity(
+                                android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                                    .setData(Uri.parse("package:" + context.packageName)),
+                            )
+                        }
+                    }) { Text("Pil ayarlarını aç") }
                 }
             }
-            if (vm.backupBusy) Text("İşleniyor…", style = MaterialTheme.typography.bodySmall)
-            vm.backupStatus?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = if (it.startsWith("Hata")) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary) }
-
-            HorizontalDivider()
-            Section("Görünüm")
-            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                val items = listOf(ThemeMode.SYSTEM to "Sistem", ThemeMode.LIGHT to "Açık", ThemeMode.DARK to "Koyu")
-                items.forEachIndexed { index, (mode, label) ->
-                    SegmentedButton(
-                        selected = settings.theme == mode,
-                        onClick = { vm.update { it.copy(theme = mode) } },
-                        shape = SegmentedButtonDefaults.itemShape(index, items.size),
-                    ) { Text(label) }
+            SettingsCard("Yedekleme", Icons.Default.Backup) {
+                Text(
+                    "Tüm sohbetleri, eklerini, hafızayı, kişilikleri ve şablonları tek bir ZIP dosyasına aktarın; " +
+                        "yeni telefonda içe aktarın. API anahtarı yedeğe dahil edilmez.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(enabled = !vm.backupBusy, onClick = {
+                        exportLauncher.launch("kutu-yedek-" + java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US).format(java.util.Date()) + ".zip")
+                    }) { Text("Dışa aktar") }
+                    OutlinedButton(enabled = !vm.backupBusy, onClick = { importLauncher.launch(arrayOf("application/zip", "application/octet-stream", "*/*")) }) {
+                        Text("İçe aktar")
+                    }
                 }
+                if (vm.backupBusy) Text("İşleniyor…", style = MaterialTheme.typography.bodySmall)
+                vm.backupStatus?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = if (it.startsWith("Hata")) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary) }
             }
-            Text(
-                "API anahtarınız cihazda Android Keystore ile şifrelenerek saklanır ve yalnızca NVIDIA'ya gönderilir.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 8.dp, bottom = 24.dp),
-            )
+            SettingsCard("Görünüm", Icons.Default.Palette) {
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                    val items = listOf(ThemeMode.SYSTEM to "Sistem", ThemeMode.LIGHT to "Açık", ThemeMode.DARK to "Koyu")
+                    items.forEachIndexed { index, (mode, label) ->
+                        SegmentedButton(
+                            selected = settings.theme == mode,
+                            onClick = { vm.update { it.copy(theme = mode) } },
+                            shape = SegmentedButtonDefaults.itemShape(index, items.size),
+                        ) { Text(label) }
+                    }
+                }
+                ToggleRow("Renkleri duvar kâğıdından al (Android 12+)", settings.dynamicColor) { v -> vm.update { it.copy(dynamicColor = v) } }
+                Text(
+                    "API anahtarlarınız cihazda Android Keystore ile şifrelenerek saklanır ve yalnızca ilgili sağlayıcıya gönderilir.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 8.dp, bottom = 24.dp),
+                )
+            }
         }
     }
 
     picker?.let { target ->
-        val current = if (target == PickerTarget.DEFAULT) settings.defaultModel else settings.memoryModel
         ModelPickerSheet(
-            current = current,
+            current = if (target == PickerTarget.DEFAULT) settings.defaultRef else settings.memoryRef,
             state = modelsState,
-            favorites = settings.favoriteModels,
-            unavailable = settings.unavailableModels,
-            describe = { id -> Capabilities.describe(id, modelsState.catalog, settings.visionConfirmed, settings.visionRejected) },
-            onSelect = { id ->
-                vm.update { if (target == PickerTarget.DEFAULT) it.copy(defaultModel = id) else it.copy(memoryModel = id) }
+            settings = settings,
+            title = if (target == PickerTarget.DEFAULT) "Varsayılan sohbet modeli" else "Arka plan modeli",
+            onSelect = { ref ->
+                vm.update {
+                    if (target == PickerTarget.DEFAULT) it.copy(defaultProvider = ref.provider, defaultModel = ref.model)
+                    else it.copy(memoryProvider = ref.provider, memoryModel = ref.model)
+                }
                 picker = null
             },
             onToggleFavorite = vm::toggleFavorite,
             onRefresh = vm::refreshModels,
+            onAddProvider = { picker = null },
             onDismiss = { picker = null },
         )
+    }
+    editingProvider?.let { id -> ProviderDialog(id, vm, onDismiss = { editingProvider = null }) }
+}
+
+/** Bir sağlayıcının anahtarını (ve özel sunucu için adresini) düzenler; bağlantıyı sınar. */
+@Composable
+private fun ProviderDialog(id: String, vm: SettingsViewModel, onDismiss: () -> Unit) {
+    val def = Providers.byId(id) ?: return
+    val settings by vm.settings.collectAsStateWithLifecycle()
+    val modelsState by vm.modelsState.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    var showKey by remember { mutableStateOf(false) }
+    var tested by remember { mutableStateOf(false) }
+    val key = settings.keyFor(id)
+    fun setKey(v: String) = vm.update {
+        if (id == Providers.NVIDIA) it.copy(apiKey = v) else it.copy(providerKeys = if (v.isBlank()) it.providerKeys - id else it.providerKeys + (id to v))
+    }
+    val loading = id in modelsState.loadingProviders
+    val canTest = if (id == Providers.CUSTOM) settings.customBaseUrl.isNotBlank() else key.isNotBlank()
+
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) { ProviderDot(id, 12.dp); Text(def.name) } },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.verticalScroll(rememberScrollState())) {
+                Text(def.note, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (id == Providers.CUSTOM) {
+                    OutlinedTextField(
+                        value = settings.customBaseUrl,
+                        onValueChange = { v -> vm.update { it.copy(customBaseUrl = v.trim()) } },
+                        label = { Text("Sunucu adresi") },
+                        placeholder = { Text("http://192.168.1.10:11434/v1") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    if (settings.customBaseUrl.startsWith("http://")) {
+                        Text(
+                            "Bu adres şifresiz (http). Yalnızca kendi yerel ağınızdaki sunucular için kullanın; mesajlarınız ağda açık gider.",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
+                OutlinedTextField(
+                    value = key,
+                    onValueChange = { v -> setKey(v.trim()) },
+                    label = { Text(if (id == Providers.CUSTOM) "API anahtarı (isteğe bağlı)" else "API anahtarı (${def.keyHint})") },
+                    singleLine = true,
+                    visualTransformation = if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    trailingIcon = {
+                        IconButton(onClick = { showKey = !showKey }) {
+                            Icon(if (showKey) Icons.Default.VisibilityOff else Icons.Default.Visibility, contentDescription = "Göster/gizle")
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (def.keyUrl.isNotBlank()) {
+                        OutlinedButton(onClick = { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(def.keyUrl))) } }) { Text("Anahtar al") }
+                    }
+                    Button(onClick = { tested = true; vm.refreshModels(id) }, enabled = canTest && !loading) {
+                        Text(if (loading) "Sınanıyor…" else "Bağlantıyı sına")
+                    }
+                }
+                if (tested && !loading) {
+                    val error = modelsState.errors[id]
+                    if (error != null) Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    else Text("Bağlantı başarılı: ${modelsState.modelsOf(id).size} model bulundu.", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Tamam") } },
+        dismissButton = {
+            if (key.isNotBlank() || (id == Providers.CUSTOM && settings.customBaseUrl.isNotBlank())) {
+                TextButton(onClick = { setKey(""); if (id == Providers.CUSTOM) vm.update { it.copy(customBaseUrl = "") }; onDismiss() }) { Text("Kaldır") }
+            }
+        },
+    )
+}
+
+/** Ayarlar ekranındaki bir bölüm: simgeli başlık + kart. */
+@Composable
+private fun SettingsCard(title: String, icon: androidx.compose.ui.graphics.vector.ImageVector, content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = MaterialTheme.shapes.large,
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+                Text(title, style = MaterialTheme.typography.titleMedium)
+            }
+            content()
+        }
     }
 }
 

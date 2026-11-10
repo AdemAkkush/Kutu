@@ -4,6 +4,8 @@ import android.content.Context
 import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import com.kutu.chat.domain.ModelRef
+import com.kutu.chat.domain.Providers
 import com.kutu.chat.domain.TtsEngine
 import com.kutu.chat.domain.TtsModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -59,7 +61,40 @@ data class AppSettings(
     val ttsTurkishOnDevice: Boolean = false,
     /** Cihaz motoru için seçilen ses adı (boşsa varsayılan). */
     val ttsDeviceVoice: String = "",
-)
+    /** NVIDIA dışındaki sağlayıcıların API anahtarları (sağlayıcı kimliği → anahtar). NVIDIA anahtarı [apiKey]'dir. */
+    val providerKeys: Map<String, String> = emptyMap(),
+    /** "Özel / yerel sunucu" sağlayıcısının adresi. */
+    val customBaseUrl: String = "",
+    /** Varsayılan sohbet ve arka plan modellerinin sağlayıcıları. */
+    val defaultProvider: String = Providers.NVIDIA,
+    val memoryProvider: String = Providers.NVIDIA,
+    /** Renkleri duvar kâğıdından al (Android 12+). Kapalıyken Kutu'nun kendi renkleri kullanılır. */
+    val dynamicColor: Boolean = false,
+) {
+    fun keyFor(provider: String): String = if (provider == Providers.NVIDIA) apiKey else providerKeys[provider].orEmpty()
+
+    fun baseUrlFor(provider: String): String = when (provider) {
+        Providers.NVIDIA -> baseUrl
+        Providers.CUSTOM -> customBaseUrl
+        else -> Providers.byId(provider)?.baseUrl.orEmpty()
+    }
+
+    /** Kullanılabilir (anahtarı / adresi girilmiş) sağlayıcılar, tanım sırasıyla. */
+    val configuredProviders: List<String>
+        get() = Providers.presets.map { it.id }.filter {
+            if (it == Providers.CUSTOM) customBaseUrl.isNotBlank() else keyFor(it).isNotBlank()
+        }
+
+    /** Aynı ayarlar, ama [apiKey]/[baseUrl] seçilen sağlayıcınınkiyle değiştirilmiş (API istemcisi bunları okur). */
+    fun forProvider(provider: String): AppSettings = copy(
+        // Yerel sunucular çoğunlukla anahtar istemez; boş başlık yerine zararsız bir değer gönderilir.
+        apiKey = keyFor(provider).ifBlank { if (provider == Providers.CUSTOM && customBaseUrl.isNotBlank()) "local" else "" },
+        baseUrl = baseUrlFor(provider),
+    )
+
+    val defaultRef: ModelRef get() = ModelRef(defaultProvider, defaultModel)
+    val memoryRef: ModelRef get() = ModelRef(memoryProvider, memoryModel)
+}
 
 /**
  * Ayarları saklar. API anahtarı Android Keystore destekli şifreli depoda tutulur;
@@ -69,6 +104,7 @@ class SettingsStore(private val context: Context) {
     private val prefs: SharedPreferences = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
     private val secure: SharedPreferences? = createSecurePrefs(context)
     private var memoryOnlyKey = ""
+    private val memoryOnlyKeys = HashMap<String, String>()
 
     private val _settings = MutableStateFlow(load())
     val settings: StateFlow<AppSettings> = _settings.asStateFlow()
@@ -80,8 +116,10 @@ class SettingsStore(private val context: Context) {
         _settings.value = next
     }
 
-    fun cachedModels(): List<String> =
-        prefs.getString(KEY_MODELS, "").orEmpty().split('\n').filter { it.isNotBlank() }
+    fun cachedModels(provider: String = Providers.NVIDIA): List<String> =
+        prefs.getString(modelsKey(provider), "").orEmpty().split('\n').filter { it.isNotBlank() }
+
+    private fun modelsKey(provider: String) = if (provider == Providers.NVIDIA) KEY_MODELS else "$KEY_MODELS.$provider"
 
     fun notificationsAsked(): Boolean = prefs.getBoolean("notificationsAsked", false)
 
@@ -101,8 +139,8 @@ class SettingsStore(private val context: Context) {
         prefs.edit().putString(KEY_CATALOG, json).apply()
     }
 
-    fun saveModels(models: List<String>) {
-        prefs.edit().putString(KEY_MODELS, models.joinToString("\n")).apply()
+    fun saveModels(models: List<String>, provider: String = Providers.NVIDIA) {
+        prefs.edit().putString(modelsKey(provider), models.joinToString("\n")).apply()
     }
 
     private fun load(): AppSettings {
@@ -131,12 +169,23 @@ class SettingsStore(private val context: Context) {
             ttsPitch = prefs.getFloat("ttsPitch", d.ttsPitch),
             ttsTurkishOnDevice = prefs.getBoolean("ttsTurkishOnDevice", d.ttsTurkishOnDevice),
             ttsDeviceVoice = prefs.getString("ttsDeviceVoice", d.ttsDeviceVoice) ?: d.ttsDeviceVoice,
+            providerKeys = Providers.presets.map { it.id }.filter { it != Providers.NVIDIA }
+                .associateWith { readProviderKey(it) }.filterValues { it.isNotBlank() },
+            customBaseUrl = prefs.getString("customBaseUrl", "") ?: "",
+            defaultProvider = prefs.getString("defaultProvider", d.defaultProvider) ?: d.defaultProvider,
+            memoryProvider = prefs.getString("memoryProvider", d.memoryProvider) ?: d.memoryProvider,
+            dynamicColor = prefs.getBoolean("dynamicColor", d.dynamicColor),
         )
     }
 
     private fun save(s: AppSettings) {
         writeKey(s.apiKey)
+        writeProviderKeys(s.providerKeys)
         prefs.edit()
+            .putString("customBaseUrl", s.customBaseUrl)
+            .putString("defaultProvider", s.defaultProvider)
+            .putString("memoryProvider", s.memoryProvider)
+            .putBoolean("dynamicColor", s.dynamicColor)
             .putString("baseUrl", s.baseUrl)
             .putString("defaultModel", s.defaultModel)
             .putString("memoryModel", s.memoryModel)
@@ -163,6 +212,20 @@ class SettingsStore(private val context: Context) {
     }
 
     private fun readKey(): String = secure?.getString("apiKey", "").orEmpty().ifEmpty { memoryOnlyKey }
+
+    private fun readProviderKey(id: String): String =
+        secure?.getString("key.$id", "").orEmpty().ifEmpty { memoryOnlyKeys[id].orEmpty() }
+
+    private fun writeProviderKeys(keys: Map<String, String>) {
+        val ids = Providers.presets.map { it.id }.filter { it != Providers.NVIDIA }
+        if (secure != null) {
+            val e = secure.edit()
+            ids.forEach { id -> keys[id]?.takeIf { it.isNotBlank() }?.let { e.putString("key.$id", it) } ?: e.remove("key.$id") }
+            e.apply()
+        } else {
+            memoryOnlyKeys.clear(); memoryOnlyKeys.putAll(keys)
+        }
+    }
 
     private fun writeKey(key: String) {
         if (secure != null) secure.edit().putString("apiKey", key).apply() else memoryOnlyKey = key

@@ -96,10 +96,10 @@ class ChatEngine(
         }
     }
 
-    suspend fun createChat(model: String, systemPrompt: String = "", persona: String = ""): Long {
+    suspend fun createChat(model: String, systemPrompt: String = "", persona: String = "", provider: String = Providers.NVIDIA): Long {
         val now = System.currentTimeMillis()
         return chats.insert(
-            ChatEntity(model = model, systemPrompt = systemPrompt, persona = persona, createdAt = now, updatedAt = now),
+            ChatEntity(model = model, provider = provider, systemPrompt = systemPrompt, persona = persona, createdAt = now, updatedAt = now),
         )
     }
 
@@ -125,9 +125,9 @@ class ChatEngine(
      * Son asistan yanıtını yeniden üretir. Eski yanıt silinmez, sürüm olarak saklanır
      * (hatalı denemeler hariç) ve kullanıcı sürümler arasında gezinebilir.
      */
-    fun regenerate(chatId: Long) {
+    fun regenerate(chatId: Long, with: ModelRef? = null) {
         if (isGenerating(chatId)) return
-        launchGeneration(chatId) {
+        launchGeneration(chatId, model = with) {
             val list = messages.list(chatId)
             val lastUser = list.lastOrNull { it.role == ROLE_USER } ?: return@launchGeneration null
             val old = list.firstOrNull { it.id > lastUser.id && it.role == ROLE_ASSISTANT }
@@ -228,7 +228,7 @@ class ChatEngine(
         }
     }
 
-    private fun launchGeneration(chatId: Long, resumeLast: Boolean = false, prepare: suspend () -> VersionCarry?) {
+    private fun launchGeneration(chatId: Long, resumeLast: Boolean = false, model: ModelRef? = null, prepare: suspend () -> VersionCarry?) {
         _activeJobs.update { it + 1 }
         val job = scope.launch {
             val carry = prepare()
@@ -237,7 +237,7 @@ class ChatEngine(
                     ?.takeIf { it.role == ROLE_ASSISTANT && it.status == STATUS_ERROR && it.content.isNotBlank() }?.id
                     ?: return@launch
             } else null
-            runGeneration(chatId, carry, resumeId)
+            runGeneration(chatId, carry, resumeId, model)
         }
         jobs[chatId] = job
         job.invokeOnCompletion {
@@ -246,9 +246,18 @@ class ChatEngine(
         }
     }
 
-    private suspend fun runGeneration(chatId: Long, carry: VersionCarry?, resumeId: Long? = null) {
-        val settings = settingsStore.settings.value
+    /** [override]: yalnızca bu yanıt için başka bir model (ör. "başka modelle yanıtla"); sohbetin modeli değişmez. */
+    private suspend fun runGeneration(chatId: Long, carry: VersionCarry?, resumeId: Long? = null, override: ModelRef? = null) {
         val chat = chats.get(chatId) ?: return
+        val ref = override ?: ModelRef(chat.provider, chat.model)
+        val provider = Providers.byId(ref.provider)
+        // API istemcisi anahtarı ve adresi ayarlardan okur; seçilen sağlayıcınınkiler yerleştirilir.
+        val settings = settingsStore.settings.value.forProvider(ref.provider)
+        val startedAt = System.currentTimeMillis()
+        var firstTokenMs = 0L
+        // Sağlayıcılar parametrelerde ayrışır; 400 ile reddedilen parametre bir kez uyarlanıp yeniden denenir.
+        var completionTokens = provider?.completionTokensParam == true
+        var sendTemperature = true
         val history = messages.list(chatId)
         // Kaldığı yerden devam: yarım kalan yanıt bağlama "asistan" mesajı olarak eklenir, bağlamdan çıkarılır.
         val resumed = resumeId?.let { id -> history.firstOrNull { it.id == id } }
@@ -268,7 +277,7 @@ class ChatEngine(
                 chatId = chatId,
                 role = ROLE_ASSISTANT,
                 content = "",
-                model = chat.model,
+                model = ref.key,
                 status = STATUS_STREAMING,
                 createdAt = System.currentTimeMillis(),
                 versions = carry?.json.orEmpty(),
@@ -302,15 +311,19 @@ class ChatEngine(
                         context
                     }
                     val request = ChatRequest(
-                        model = chat.model,
+                        model = ref.model,
                         messages = requestMessages,
                         stream = true,
-                        temperature = settings.temperature,
-                        maxTokens = settings.maxTokens,
+                        temperature = settings.temperature.takeIf { sendTemperature },
+                        maxTokens = settings.maxTokens.takeIf { !completionTokens },
+                        maxCompletionTokens = settings.maxTokens.takeIf { completionTokens },
                     )
                     api.streamChat(settings, request).collect { event ->
                         if (event is StreamEvent.Chunk) {
                             if (notice.isNotEmpty()) notice = ""
+                            if (firstTokenMs == 0L && (event.content.isNotEmpty() || event.reasoning.isNotEmpty())) {
+                                firstTokenMs = System.currentTimeMillis() - startedAt
+                            }
                             text.append(event.content)
                             reasoning.append(event.reasoning)
                             val now = System.currentTimeMillis()
@@ -327,6 +340,13 @@ class ChatEngine(
                     }
                     break
                 } catch (e: ApiException) {
+                    val msg = e.message.orEmpty().lowercase()
+                    if (e.code == 400 && !completionTokens && "max_tokens" in msg && "max_completion_tokens" in msg) {
+                        completionTokens = true; continue
+                    }
+                    if (e.code == 400 && sendTemperature && "temperature" in msg) {
+                        sendTemperature = false; continue
+                    }
                     // Geçici ağ sorunu (örn. uygulama arka plana atıldı, ağ değişti): bekleyip aynı yanıtı sürdür.
                     if (!e.retriable || attempt >= retryDelaysMs.size) throw e
                     val wait = retryDelaysMs[attempt]
@@ -346,11 +366,11 @@ class ChatEngine(
             throw e
         } catch (e: ApiException) {
             failure = e.message ?: "Bilinmeyen hata"
-            markUnavailableIfGone(e, chat.model)
+            markUnavailableIfGone(e, ref.key)
             if (hadImages && e.code in IMAGE_REJECT_CODES) {
                 val msg = e.message.orEmpty().lowercase()
                 if ("multimodal" in msg || "image" in msg || "vision" in msg) {
-                    settingsStore.update { it.copy(visionRejected = it.visionRejected + chat.model, visionConfirmed = it.visionConfirmed - chat.model) }
+                    settingsStore.update { it.copy(visionRejected = it.visionRejected + ref.key, visionConfirmed = it.visionConfirmed - ref.key) }
                 }
                 failure += "\n\nBu model görselleri desteklemiyor olabilir. Görsel destekli bir model seçin " +
                     "(örn. gemma-4-31b-it) ya da görseli kaldırıp tekrar deneyin."
@@ -374,11 +394,12 @@ class ChatEngine(
                 else -> null
             }
         }
+        current = current.copy(durationMs = System.currentTimeMillis() - startedAt, firstTokenMs = firstTokenMs)
         finish(chatId, current, finalText, reasoning.toString(), failure)
         _generations.update { it - chatId }
 
-        if (failure == null && hadImages && chat.model !in settings.visionConfirmed) {
-            settingsStore.update { it.copy(visionConfirmed = it.visionConfirmed + chat.model, visionRejected = it.visionRejected - chat.model) }
+        if (failure == null && hadImages && ref.key !in settings.visionConfirmed) {
+            settingsStore.update { it.copy(visionConfirmed = it.visionConfirmed + ref.key, visionRejected = it.visionRejected - ref.key) }
         }
         if (failure == null) {
             tracked { postProcess(chatId) }
@@ -423,24 +444,38 @@ class ChatEngine(
         runCatching { summarizeIfNeeded(chatId) }
     }
 
-    /** Arka plan modeli çalışmıyorsa sohbet modeline düşer; 404/410 alan model işaretlenir. */
-    private suspend fun background(prompt: List<ChatMessageDto>, maxTokens: Int): String {
-        val settings = settingsStore.settings.value
-        val preferred = settings.memoryModel.ifBlank { settings.defaultModel }
-        val candidates = listOf(preferred, settings.defaultModel)
-            .filter { it.isNotBlank() && it !in settings.unavailableModels }
+    /**
+     * Başlık/özet/hafıza için küçük modeli dener; anahtarı yoksa ya da model kaldırılmışsa
+     * sohbetin kendi modeline düşer (o az önce yanıt verdiği için çalıştığı bilinir).
+     */
+    private suspend fun background(prompt: List<ChatMessageDto>, maxTokens: Int, chat: ChatEntity? = null): String {
+        val base = settingsStore.settings.value
+        val candidates = listOfNotNull(base.memoryRef, chat?.let { ModelRef(it.provider, it.model) }, base.defaultRef)
+            .filter { it.model.isNotBlank() && it.key !in base.unavailableModels && base.forProvider(it.provider).apiKey.isNotBlank() }
             .distinct()
         var last: ApiException? = null
-        for (model in candidates) {
-            try {
-                return api.complete(
-                    settings,
-                    ChatRequest(model = model, messages = prompt, stream = false, temperature = 0f, maxTokens = maxTokens),
-                )
-            } catch (e: ApiException) {
-                markUnavailableIfGone(e, model)
-                last = e
-                if (e.code != 404 && e.code != 410) throw e
+        for (ref in candidates) {
+            val s = base.forProvider(ref.provider)
+            var completionTokens = Providers.byId(ref.provider)?.completionTokensParam == true
+            var temperature: Float? = 0f
+            var tries = 0
+            while (tries++ < 3) {
+                try {
+                    return api.complete(
+                        s,
+                        ChatRequest(
+                            model = ref.model, messages = prompt, stream = false, temperature = temperature,
+                            maxTokens = maxTokens.takeIf { !completionTokens }, maxCompletionTokens = maxTokens.takeIf { completionTokens },
+                        ),
+                    )
+                } catch (e: ApiException) {
+                    val msg = e.message.orEmpty().lowercase()
+                    if (e.code == 400 && !completionTokens && "max_completion_tokens" in msg) { completionTokens = true; continue }
+                    if (e.code == 400 && temperature != null && "temperature" in msg) { temperature = null; continue }
+                    markUnavailableIfGone(e, ref.key)
+                    last = e
+                    break   // sıradaki adayı dene
+                }
             }
         }
         throw last ?: ApiException("Kullanılabilir arka plan modeli yok.")
@@ -461,7 +496,7 @@ class ChatEngine(
         val assistant = list.firstOrNull { it.role == ROLE_ASSISTANT } ?: return
         val userText = user.content.ifBlank { Attachments.parse(user.attachments).joinToString { it.name } }
         val title = MemoryLogic.cleanTitle(
-            background(MemoryLogic.titleMessages(userText, stripThinking(assistant.content)), 40),
+            background(MemoryLogic.titleMessages(userText, stripThinking(assistant.content)), 40, chat),
         )
         if (title.isNotBlank()) {
             val fresh = chats.get(chatId) ?: return
@@ -481,6 +516,7 @@ class ChatEngine(
         val raw = background(
             MemoryLogic.extractionMessages(existing, lastUser.content, stripThinking(lastAssistant.content)),
             400,
+            chats.get(chatId),
         )
         val ops = MemoryLogic.parseOps(raw, existing)
         if (ops.isEmpty) return
@@ -503,7 +539,7 @@ class ChatEngine(
         if (pending.size <= KEEP_RECENT + 1) return
 
         val toFold = pending.dropLast(KEEP_RECENT)
-        val summary = stripThinking(background(MemoryLogic.summaryMessages(chat.summary, toFold), 700)).trim()
+        val summary = stripThinking(background(MemoryLogic.summaryMessages(chat.summary, toFold), 700, chat)).trim()
         if (summary.isBlank()) return
         chats.setSummary(chatId, summary, toFold.last().id)
     }

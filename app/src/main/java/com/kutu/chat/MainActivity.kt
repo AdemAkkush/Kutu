@@ -1,6 +1,10 @@
 package com.kutu.chat
 
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
+import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.flow.MutableStateFlow
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -35,8 +39,17 @@ import com.kutu.chat.ui.theme.KutuTheme
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
+    /** Başka uygulamalardan "Paylaş → Kutu" ile gelen içerik; sohbet ekranı tüketir. */
+    private val shared = MutableStateFlow<SharedContent?>(null)
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        shared.value = SharedContent.from(intent)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (savedInstanceState == null) shared.value = SharedContent.from(intent)
         enableEdgeToEdge()
         val container = (application as KutuApp).container
         val factory = viewModelFactory {
@@ -48,19 +61,40 @@ class MainActivity : ComponentActivity() {
         }
         setContent {
             val settings by container.settings.settings.collectAsStateWithLifecycle()
-            KutuTheme(settings.theme) {
+            KutuTheme(settings.theme, settings.dynamicColor) {
                 Surface(color = MaterialTheme.colorScheme.background) {
-                    AppRoot(factory)
+                    AppRoot(factory, shared)
                 }
             }
         }
     }
 }
 
+data class SharedContent(val text: String?, val uris: List<Uri>) {
+    companion object {
+        fun from(intent: Intent?): SharedContent? {
+            if (intent == null || (intent.action != Intent.ACTION_SEND && intent.action != Intent.ACTION_SEND_MULTIPLE)) return null
+            val text = intent.getStringExtra(Intent.EXTRA_TEXT)
+            @Suppress("DEPRECATION")
+            val uris = if (intent.action == Intent.ACTION_SEND_MULTIPLE) intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM).orEmpty()
+            else listOfNotNull(intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM))
+            return if (text.isNullOrBlank() && uris.isEmpty()) null else SharedContent(text, uris)
+        }
+    }
+}
+
 @Composable
-private fun AppRoot(factory: androidx.lifecycle.ViewModelProvider.Factory) {
+private fun AppRoot(factory: androidx.lifecycle.ViewModelProvider.Factory, shared: MutableStateFlow<SharedContent?>) {
     val nav = rememberNavController()
     val chatVm: ChatViewModel = viewModel(factory = factory)
+    val incoming by shared.collectAsStateWithLifecycle()
+    LaunchedEffect(incoming) {
+        incoming?.let {
+            chatVm.receiveShared(it.text, it.uris)
+            shared.value = null
+            nav.popBackStack("main", inclusive = false)
+        }
+    }
 
     NavHost(navController = nav, startDestination = "main") {
         composable("main") {

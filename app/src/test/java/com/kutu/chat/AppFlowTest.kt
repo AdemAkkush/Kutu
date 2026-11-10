@@ -5,6 +5,7 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextInput
 import androidx.test.core.app.ApplicationProvider
 import com.kutu.chat.data.db.ChatEntity
@@ -65,7 +66,7 @@ class AppFlowTest {
     @After fun tearDown() = server.shutdown()
 
     @Test fun launchesAndShowsEmptyState() {
-        compose.onNodeWithText("Merhaba 👋").assertIsDisplayed()
+        compose.onNodeWithText("Bugün ne yapalım?").assertIsDisplayed()
         compose.onNodeWithText("Mesaj yaz…").assertIsDisplayed()
     }
 
@@ -95,7 +96,8 @@ class AppFlowTest {
     }
 
     @Test fun choosingAPersonaChipStartsChatWithItsSystemPrompt() {
-        compose.onNodeWithText("💻 Kod asistanı").performClick()
+        // Küçük test ekranında çip katlamanın altında kalabilir; tıklama eylemi doğrudan tetiklenir.
+        compose.onNodeWithText("💻 Kod asistanı").performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick)
         compose.onNodeWithText("Mesaj yaz…").performTextInput("Merhaba")
         compose.onNodeWithContentDescription("Gönder").performClick()
         compose.waitUntil(15_000) {
